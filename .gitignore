@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Virtualenv
+venv/
+env/
+ENV/
+.venv/
+
+# AI Dubbing Studio Runtime Dirs
+projects/
+output/
+cache/
+logs/
+models/
+temp/
+*.tmp
+
+# Environment variables
+.env
+.env.local
+
+# PyInstaller / Build
+dist/
+build/
+*.spec.bak
+
+# IDE & OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
