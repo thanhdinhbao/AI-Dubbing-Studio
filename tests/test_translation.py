@@ -52,3 +52,23 @@ def test_local_llm_provider_initialization():
     assert prov.api_key == "ollama"
 
 
+def test_multilingual_target_languages():
+    from app.constants import SUPPORTED_TARGET_LANGUAGES, EDGE_TTS_VOICES_BY_LANG
+    from app.providers.edge_tts_provider import EdgeTTSProvider
+    from app.providers.translation_api import get_target_lang_prompt_name
+
+    assert len(SUPPORTED_TARGET_LANGUAGES) >= 10
+    provider = EdgeTTSProvider()
+
+    for lang_item in SUPPORTED_TARGET_LANGUAGES:
+        code = lang_item["code"]
+        prompt_name = get_target_lang_prompt_name(code)
+        assert len(prompt_name) > 0
+
+        # Check that EdgeTTS provides voices for this target language
+        voices = provider.get_voices(target_lang=code)
+        assert len(voices) > 0
+        assert all("id" in v and "name" in v for v in voices)
+
+
+

@@ -45,7 +45,8 @@ class ExportPage(QWidget):
         out_layout.addWidget(self.filename_input, 0, 1)
 
         out_layout.addWidget(QLabel("Thư mục lưu trữ:"), 1, 0)
-        self.dir_input = QLineEdit(str(get_default_output_dir()))
+        self.dir_input = QLineEdit()
+        self.dir_input.setPlaceholderText("Thư mục output trong dự án...")
         out_layout.addWidget(self.dir_input, 1, 1)
 
         self.btn_browse_dir = QPushButton("📂 Duyệt...")
@@ -125,8 +126,17 @@ class ExportPage(QWidget):
 
     def set_project(self, project: ProjectData):
         self.current_project = project
-        if project.output_video_path and os.path.exists(project.output_video_path):
-            self.show_render_result(project.output_video_path)
+        if project:
+            if project.project_dir:
+                proj_out_dir = Path(project.project_dir) / "output"
+                proj_out_dir.mkdir(parents=True, exist_ok=True)
+                self.dir_input.setText(str(proj_out_dir))
+            if project.video_path:
+                stem = Path(project.video_path).stem
+                self.filename_input.setText(f"{stem}_dubbed_vi.mp4")
+
+            if project.output_video_path and os.path.exists(project.output_video_path):
+                self.show_render_result(project.output_video_path)
 
     def show_render_result(self, video_path: str):
         if os.path.exists(video_path):
@@ -135,12 +145,19 @@ class ExportPage(QWidget):
             self.lbl_result_info.setText(f"✅ Video đã tạo thành công! Dung lượng: {size_mb} MB")
 
     def _browse_output_dir(self):
-        folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu trữ video")
+        initial_dir = self.dir_input.text().strip() or (
+            str(Path(self.current_project.project_dir) / "output")
+            if (self.current_project and self.current_project.project_dir)
+            else str(get_default_output_dir())
+        )
+        folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu trữ video", initial_dir)
         if folder:
             self.dir_input.setText(folder)
 
     def _open_output_folder(self):
         target_dir = self.dir_input.text().strip()
+        if not target_dir and self.current_project and self.current_project.project_dir:
+            target_dir = str(Path(self.current_project.project_dir) / "output")
         if os.path.exists(target_dir):
             if os.name == "nt":
                 os.startfile(target_dir)
@@ -158,9 +175,16 @@ class ExportPage(QWidget):
             QMessageBox.warning(self, "Thông báo", "Chưa tính toán timeline động. Vui lòng qua Tab Timeline để dựng timeline trước.")
             return
 
-        out_dir = Path(self.dir_input.text().strip())
+        dir_str = self.dir_input.text().strip()
+        if dir_str:
+            out_dir = Path(dir_str)
+        elif self.current_project and self.current_project.project_dir:
+            out_dir = Path(self.current_project.project_dir) / "output"
+        else:
+            out_dir = get_default_output_dir()
+
         out_dir.mkdir(parents=True, exist_ok=True)
-        filename = self.filename_input.text().strip() or "dubbed_video.mp4"
+        filename = self.filename_input.text().strip() or "dubbed_video_vi.mp4"
         out_path = str(out_dir / filename)
 
         settings = {

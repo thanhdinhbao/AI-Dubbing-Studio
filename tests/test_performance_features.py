@@ -40,7 +40,7 @@ def test_multithreaded_tts_speedup():
     ]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        provider = MockSlowTTSProvider(delay=0.04)
+        provider = MockSlowTTSProvider(delay=0.06)
         service = SpeechSynthesisService(provider=provider)
 
         start_time = time.time()
@@ -52,9 +52,9 @@ def test_multithreaded_tts_speedup():
         )
         duration = time.time() - start_time
 
-        # 10 items * 0.04s = 0.40s sequentially. With 5 threads, it should take ~0.08s - 0.20s
+        # 10 items * 0.06s = 0.60s sequentially. With 5 threads, execution is well below sequential time
         assert len(results) == 10
-        assert duration < 0.35, f"Expected multi-threaded execution to be fast, but took {duration:.3f}s"
+        assert duration < 0.50, f"Expected multi-threaded execution to be fast, but took {duration:.3f}s"
         # Ensure order is preserved
         for i, dlg in enumerate(results):
             assert dlg.id == f"dlg_{i}"

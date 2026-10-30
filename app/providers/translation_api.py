@@ -10,8 +10,18 @@ from typing import List, Tuple, Optional
 from app.providers.base import BaseTranslationProvider
 from app.exceptions import TranslationError
 from app.utils.retry import retry_call
+from app.constants import SUPPORTED_TARGET_LANGUAGES
 
 logger = logging.getLogger("AIDubbingStudio.TranslationAPI")
+
+
+def get_target_lang_prompt_name(target_lang: str) -> str:
+    """Return friendly language name for LLM system prompts."""
+    code_clean = (target_lang or "vi").strip()
+    for item in SUPPORTED_TARGET_LANGUAGES:
+        if item["code"].lower() == code_clean.lower():
+            return item["prompt_name"]
+    return code_clean
 
 
 class GoogleFreeTranslationProvider(BaseTranslationProvider):
@@ -37,7 +47,9 @@ class GoogleFreeTranslationProvider(BaseTranslationProvider):
             return text
 
         sl = "auto" if source_lang in ("auto", "") else source_lang
-        tl = "vi" if target_lang in ("vi", "") else target_lang
+        tl = (target_lang or "vi").strip()
+        if tl.lower() in ("zh", "zh-cn", "chinese"):
+            tl = "zh-CN"
 
         url = (
             f"https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&q="
@@ -142,10 +154,11 @@ class OpenAITranslationProvider(BaseTranslationProvider):
             return []
 
         def _do_request():
+            lang_name = get_target_lang_prompt_name(target_lang)
             system_prompt = (
-                "Bạn là chuyên gia dịch thuật và lồng tiếng phim chuyên nghiệp sang tiếng Việt.\n"
+                f"Bạn là chuyên gia dịch thuật và lồng tiếng phim chuyên nghiệp sang {lang_name}.\n"
                 "Quy tắc bắt buộc:\n"
-                "1. Dịch chuẩn xác, tự nhiên, thuần Việt, phong cách thuyết minh/lồng tiếng truyền cảm.\n"
+                f"1. Dịch chuẩn xác, tự nhiên, văn phong bản xứ của {lang_name}, phù hợp phong cách thuyết minh/lồng tiếng truyền cảm.\n"
                 "2. Giữ nguyên thuật ngữ quan trọng, tên riêng, con số và ngữ nghĩa gốc.\n"
                 "3. Giữ đúng thứ tự và số lượng câu trong mảng.\n"
                 "4. CHỈ TRẢ VỀ DUY NHẤT một mảng JSON hợp lệ dạng [\"câu 1\", \"câu 2\", ...]. Không thêm bất kỳ văn bản giải thích hay markdown nào khác."
@@ -157,7 +170,7 @@ class OpenAITranslationProvider(BaseTranslationProvider):
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Dịch mảng câu sau sang tiếng Việt:\n{user_content}"}
+                    {"role": "user", "content": f"Dịch mảng câu sau sang {lang_name}:\n{user_content}"}
                 ],
                 "temperature": self.temperature
             }

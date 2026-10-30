@@ -8,17 +8,18 @@ from PySide6.QtWidgets import (
 
 from app.models import DialogueSegment, ProjectData
 from app.ui.widgets.subtitle_editor import SubtitleEditorWidget
-from app.constants import WHISPER_MODELS
+from app.constants import WHISPER_MODELS, SUPPORTED_TARGET_LANGUAGES
 
 logger = logging.getLogger("AIDubbingStudio.TranscriptionPage")
 
 
 class TranscriptionPage(QWidget):
-    """Tab 2: Speech-to-Text Transcription & Vietnamese Translation Subtitle Editor."""
+    """Tab 2: Speech-to-Text Transcription & Multilingual Translation Subtitle Editor."""
 
     transcription_requested = Signal(str, str, int)  # model_size, device, beam_size
-    translation_requested = Signal(str, dict)  # backend, options
-    translate_single_requested = Signal(int, str, dict)  # row_idx, backend, options
+    translation_requested = Signal(str, str, dict)  # backend, target_lang, options
+    translate_single_requested = Signal(int, str, str, dict)  # row_idx, backend, target_lang, options
+    target_language_changed = Signal(str)  # target_lang code (e.g. 'vi', 'en', 'ja'...)
     config_requested = Signal()  # request opening settings dialog
 
     def __init__(self, parent=None):
@@ -30,7 +31,7 @@ class TranscriptionPage(QWidget):
         layout.setSpacing(12)
 
         # Control Panel Box
-        controls_group = QGroupBox("Điều khiển Nhận diện & Dịch thuật Tiếng Việt")
+        controls_group = QGroupBox("Điều khiển Nhận diện & Dịch thuật Đa ngôn ngữ")
         ctrl_grid = QGridLayout(controls_group)
         ctrl_grid.setSpacing(10)
         ctrl_grid.setContentsMargins(12, 12, 12, 12)
@@ -68,11 +69,18 @@ class TranscriptionPage(QWidget):
         ctrl_grid.addLayout(asr_box, 0, 1)
 
         # --- Row 1: Translation Controls ---
-        lbl_trans_header = QLabel("<b>🌐 Dịch sang Tiếng Việt:</b>")
+        lbl_trans_header = QLabel("<b>🌐 Dịch thuật Đa ngôn ngữ:</b>")
         ctrl_grid.addWidget(lbl_trans_header, 1, 0)
 
         trans_box = QHBoxLayout()
         trans_box.setSpacing(8)
+
+        trans_box.addWidget(QLabel("Ngôn ngữ đích:"))
+        self.combo_target_lang = QComboBox()
+        for item in SUPPORTED_TARGET_LANGUAGES:
+            self.combo_target_lang.addItem(item["name"], item["code"])
+        self.combo_target_lang.currentIndexChanged.connect(self._on_target_lang_changed)
+        trans_box.addWidget(self.combo_target_lang)
 
         trans_box.addWidget(QLabel("Bộ máy dịch:"))
         self.combo_trans_engine = QComboBox()
@@ -91,7 +99,7 @@ class TranscriptionPage(QWidget):
         self.btn_translate_selected.clicked.connect(self._on_translate_selected_clicked)
         trans_box.addWidget(self.btn_translate_selected)
 
-        self.btn_translate = QPushButton("🌐 Dịch toàn bộ sang Tiếng Việt")
+        self.btn_translate = QPushButton("🌐 Bắt đầu Dịch toàn bộ")
         self.btn_translate.setStyleSheet("background-color: #9ece6a; color: #15161e; font-weight: bold;")
         self.btn_translate.clicked.connect(self._on_translate_clicked)
         trans_box.addWidget(self.btn_translate)
@@ -108,6 +116,15 @@ class TranscriptionPage(QWidget):
     def set_project(self, project: ProjectData):
         self.current_project = project
         self.subtitle_editor.load_dialogues(project.dialogues)
+        if hasattr(project, "target_language") and project.target_language:
+            self.set_target_language(project.target_language)
+
+    def set_target_language(self, lang_code: str):
+        idx = self.combo_target_lang.findData(lang_code)
+        if idx >= 0 and self.combo_target_lang.currentIndex() != idx:
+            self.combo_target_lang.blockSignals(True)
+            self.combo_target_lang.setCurrentIndex(idx)
+            self.combo_target_lang.blockSignals(False)
 
     def get_dialogues(self) -> List[DialogueSegment]:
         return self.subtitle_editor.get_dialogues()
@@ -117,6 +134,15 @@ class TranscriptionPage(QWidget):
 
     def _get_selected_backend(self) -> str:
         return self.combo_trans_engine.currentData() or "google_free"
+
+    def _get_selected_target_lang(self) -> str:
+        return self.combo_target_lang.currentData() or "vi"
+
+    def _on_target_lang_changed(self):
+        target_lang = self._get_selected_target_lang()
+        if self.current_project:
+            self.current_project.target_language = target_lang
+        self.target_language_changed.emit(target_lang)
 
     def _on_transcribe_clicked(self):
         if not self.current_project or not self.current_project.video_path:
@@ -133,7 +159,8 @@ class TranscriptionPage(QWidget):
             QMessageBox.warning(self, "Thông báo", "Chưa có lời thoại nào để dịch. Hãy chạy nhận diện ASR trước.")
             return
         backend = self._get_selected_backend()
-        self.translation_requested.emit(backend, {})
+        target_lang = self._get_selected_target_lang()
+        self.translation_requested.emit(backend, target_lang, {})
 
     def _on_translate_selected_clicked(self):
         row = self.subtitle_editor.get_selected_index()
@@ -141,6 +168,7 @@ class TranscriptionPage(QWidget):
             QMessageBox.warning(self, "Thông báo", "Vui lòng bấm chọn một dòng trên bảng phụ đề để dịch.")
             return
         backend = self._get_selected_backend()
-        self.translate_single_requested.emit(row, backend, {})
+        target_lang = self._get_selected_target_lang()
+        self.translate_single_requested.emit(row, backend, target_lang, {})
 
 

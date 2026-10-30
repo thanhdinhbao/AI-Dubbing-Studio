@@ -60,6 +60,10 @@ class MainWindow(QMainWindow):
         self._test_voice_thread: Optional[QThread] = None
         self._test_voice_worker = None
 
+        # Dedicated runner for non-blocking single line translation
+        self._single_trans_thread: Optional[QThread] = None
+        self._single_trans_worker: Optional[TranslationWorker] = None
+
         # Connect TaskManager signals to bottom progress panel
         self.task_manager.task_started.connect(self._on_task_started)
         self.task_manager.task_finished.connect(self._on_task_finished)
@@ -224,11 +228,13 @@ class MainWindow(QMainWindow):
         self.page_transcription.transcription_requested.connect(self._on_transcription_requested)
         self.page_transcription.translation_requested.connect(self._on_translation_requested)
         self.page_transcription.translate_single_requested.connect(self._on_translate_single_requested)
+        self.page_transcription.target_language_changed.connect(self._on_target_language_changed)
         self.page_transcription.config_requested.connect(lambda: self._open_settings(active_tab=1))
 
         # Page 3
         self.page_voice.tts_generation_requested.connect(self._on_tts_requested)
         self.page_voice.test_voice_requested.connect(self._on_test_voice_requested)
+        self.page_voice.target_language_changed.connect(self._on_voice_target_language_changed)
 
         # Page 4
         self.page_audio.separation_requested.connect(self._on_separation_requested)
@@ -404,13 +410,29 @@ class MainWindow(QMainWindow):
             model = options.get("model") or app_config.get("translation_model", "gpt-4o-mini")
             return OpenAITranslationProvider(base_url=base_url, api_key=api_key, model=model)
 
-    def _on_translation_requested(self, backend: str = "google_free", options: Optional[dict] = None):
+    def _on_target_language_changed(self, target_lang: str):
+        proj = self.project_manager.current_project
+        if proj:
+            proj.target_language = target_lang
+            self.project_manager.save_project(proj)
+        self.page_voice.set_target_language(target_lang)
+
+    def _on_voice_target_language_changed(self, target_lang: str):
+        proj = self.project_manager.current_project
+        if proj:
+            proj.target_language = target_lang
+            self.project_manager.save_project(proj)
+        self.page_transcription.set_target_language(target_lang)
+
+    def _on_translation_requested(self, backend: str = "google_free", target_lang: str = "vi", options: Optional[dict] = None):
         proj = self.project_manager.current_project
         if not proj or not proj.dialogues:
             return
         if self.task_manager.is_busy:
             QMessageBox.warning(self, "Đang xử lý", "Một tác vụ khác đang được thực hiện. Vui lòng chờ hoàn tất.")
             return
+
+        target_lang = target_lang or (proj.target_language if proj else "vi")
 
         try:
             provider = self._create_translation_provider(backend, options)
@@ -420,27 +442,41 @@ class MainWindow(QMainWindow):
 
         worker = TranslationWorker(
             dialogues=proj.dialogues,
-            provider=provider
+            provider=provider,
+            target_lang=target_lang
         )
+
+        from app.constants import SUPPORTED_TARGET_LANGUAGES
+        lang_item = next((item for item in SUPPORTED_TARGET_LANGUAGES if item["code"] == target_lang), None)
+        lang_name = lang_item["name"] if lang_item else target_lang
 
         def on_trans_done(dialogues):
             proj.dialogues = dialogues
+            proj.target_language = target_lang
             self.page_transcription.set_project(proj)
+            self.page_voice.set_target_language(target_lang)
             self.project_manager.save_project(proj)
             QMessageBox.information(
                 self,
                 "Thành công",
-                f"Đã dịch toàn bộ {len(dialogues)} câu thoại sang Tiếng Việt ({backend}) thành công!"
+                f"Đã dịch toàn bộ {len(dialogues)} câu thoại sang {lang_name} ({backend}) thành công!"
             )
 
         worker.finished.connect(lambda dlgs: self._run_on_ui_thread(on_trans_done, dlgs))
-        self.task_manager.start_worker(worker, f"Dịch thuật Tiếng Việt ({backend})")
+        self.task_manager.start_worker(worker, f"Dịch thuật {lang_name} ({backend})")
 
-    def _on_translate_single_requested(self, row_index: int, backend: str = "google_free", options: Optional[dict] = None):
+    def _on_translate_single_requested(
+        self,
+        row_index: int,
+        backend: str = "google_free",
+        target_lang: str = "vi",
+        options: Optional[dict] = None
+    ):
         proj = self.project_manager.current_project
         if not proj or not proj.dialogues or row_index < 0 or row_index >= len(proj.dialogues):
             return
 
+        target_lang = target_lang or (proj.target_language if proj else "vi")
         dlg = proj.dialogues[row_index]
         try:
             provider = self._create_translation_provider(backend, options)
@@ -448,14 +484,32 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể khởi tạo bộ máy dịch thuật: {e}")
             return
 
-        # Perform translation in dedicated background thread
+        # Safely cancel and clean up any previous single-translation thread
+        if self._single_trans_thread is not None:
+            try:
+                if self._single_trans_thread.isRunning():
+                    if self._single_trans_worker:
+                        self._single_trans_worker.cancel()
+                    self._single_trans_thread.quit()
+                    self._single_trans_thread.wait(500)
+            except (RuntimeError, Exception):
+                pass
+            self._single_trans_thread = None
+            self._single_trans_worker = None
+
         thread = QThread()
         worker = TranslationWorker(
             dialogues=[dlg],
-            provider=provider
+            provider=provider,
+            target_lang=target_lang
         )
+        self._single_trans_thread = thread
+        self._single_trans_worker = worker
+
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+
+        self.page_transcription.btn_translate_selected.setEnabled(False)
 
         def on_single_done(dlgs):
             if dlgs:
@@ -467,8 +521,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Lỗi Dịch Thuật", f"Không thể dịch câu đã chọn:\n{err}")
             thread.quit()
 
+        def on_thread_finished():
+            self.page_transcription.btn_translate_selected.setEnabled(True)
+            if self._single_trans_thread is thread:
+                self._single_trans_thread = None
+                self._single_trans_worker = None
+
         worker.finished.connect(lambda d: self._run_on_ui_thread(on_single_done, d))
         worker.error.connect(lambda e: self._run_on_ui_thread(on_single_err, e))
+        thread.finished.connect(on_thread_finished)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
@@ -537,10 +598,26 @@ class MainWindow(QMainWindow):
         else:
             provider = OfflineTTSProvider(model_path=app_config.get("offline_tts_model_path"))
 
+        test_lang = options.get("target_lang") or (proj.target_language if proj else "vi")
+        sample_texts = {
+            "vi": "Xin chào, đây là giọng đọc thử nghiệm của hệ thống lồng tiếng AI.",
+            "en": "Hello, this is a sample preview of the AI voice dubbing system.",
+            "ja": "こんにちは、これはAI吹き替えシステムの音声プレビューです。",
+            "ko": "안녕하세요, AI 더빙 및 음성 합성 시스템의 미리보기 음성입니다.",
+            "zh-CN": "你好，这是AI配音与语音合成系统的测试音频。",
+            "fr": "Bonjour, ceci est un aperçu audio du hệ thống lồng tiếng IA.",
+            "de": "Hallo, dies ist eine Sprachprobe des KI-Synchronisationssystems.",
+            "es": "Hola, esta es una muestra de voz del sistema de doblaje con IA.",
+            "ru": "Здравствуйте, это тестовый образец голоса системы дубляжа ИИ.",
+            "th": "สวัสดี นี่คือตัวอย่างเสียง của hệ thống AI dubbing",
+            "id": "Halo, ini adalah sampel suara dari sistem dubbing AI."
+        }
+        test_text = sample_texts.get(test_lang, sample_texts["vi"])
+
         from app.models import DialogueSegment
         dummy_dlg = DialogueSegment(
-            source_text="Xin chào, đây là giọng đọc thử nghiệm của hệ thống lồng tiếng AI.",
-            target_text="Xin chào, đây là giọng đọc thử nghiệm của hệ thống lồng tiếng AI."
+            source_text=test_text,
+            target_text=test_text
         )
 
         # Safely cancel and clean up any previous test voice preview thread
@@ -681,4 +758,22 @@ class MainWindow(QMainWindow):
 
         worker.finished.connect(lambda res: self._run_on_ui_thread(on_render_done, res))
         self.task_manager.start_worker(worker, "Render Video Hoàn chỉnh")
+
+    def closeEvent(self, event):
+        """Safely terminate all background threads before window closes."""
+        if self.task_manager:
+            self.task_manager.cancel_current_task()
+
+        for t_attr in ("_test_voice_thread", "_single_trans_thread"):
+            t = getattr(self, t_attr, None)
+            if t is not None:
+                try:
+                    if t.isRunning():
+                        t.quit()
+                        t.wait(500)
+                except Exception:
+                    pass
+                setattr(self, t_attr, None)
+
+        super().closeEvent(event)
 

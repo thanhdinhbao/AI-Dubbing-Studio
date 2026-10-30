@@ -8,21 +8,29 @@ from PySide6.QtWidgets import (
 )
 
 from app.models import ProjectData
-from app.constants import EDGE_TTS_VIETNAMESE_VOICES, VIENEU_VIETNAMESE_VOICES, TTS_BACKENDS
+from app.constants import (
+    SUPPORTED_TARGET_LANGUAGES,
+    EDGE_TTS_VOICES_BY_LANG,
+    EDGE_TTS_VIETNAMESE_VOICES,
+    VIENEU_VIETNAMESE_VOICES,
+    TTS_BACKENDS
+)
 from app.ui.widgets.media_player import MediaPlayerWidget
 
 logger = logging.getLogger("AIDubbingStudio.VoicePage")
 
 
 class VoicePage(QWidget):
-    """Tab 3: AI Voice Configuration and Vietnamese Speech Synthesis."""
+    """Tab 3: AI Voice Configuration and Multilingual Speech Synthesis."""
 
     tts_generation_requested = Signal(str, str, dict)  # backend, voice_id, options
     test_voice_requested = Signal(str, str, dict)  # backend, voice_id, options
+    target_language_changed = Signal(str)  # target_lang code
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_project: Optional[ProjectData] = None
+        self.target_language: str = "vi"
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -39,18 +47,25 @@ class VoicePage(QWidget):
 
         prov_layout.addWidget(QLabel("Nhà cung cấp (Provider):"), 0, 0)
         self.combo_backend = QComboBox()
-        self.combo_backend.addItem("Microsoft Edge TTS (Tự nhiên, Khuyến nghị)", "edge_tts")
-        self.combo_backend.addItem("VieNeu-TTS SDK v3 Turbo (Offline / On-Device AI Voice)", "vieneu")
+        self.combo_backend.addItem("Microsoft Edge TTS (Tự nhiên, Đa ngôn ngữ - Khuyến nghị)", "edge_tts")
+        self.combo_backend.addItem("VieNeu-TTS SDK v3 Turbo (Offline / On-Device Tiếng Việt)", "vieneu")
         self.combo_backend.addItem("VieNeu-TTS SDK v3 Nano (24kHz Siêu nhẹ cho CPU yếu)", "vieneu_nano")
-        self.combo_backend.addItem("OpenAI-Compatible Speech API", "openai_compatible")
+        self.combo_backend.addItem("OpenAI-Compatible Speech API (Đa ngôn ngữ)", "openai_compatible")
         self.combo_backend.addItem("Offline TTS Engine (Piper/Local)", "offline_engine")
         self.combo_backend.currentIndexChanged.connect(self._on_backend_changed)
         prov_layout.addWidget(self.combo_backend, 0, 1)
 
-        prov_layout.addWidget(QLabel("Giọng đọc Tiếng Việt:"), 1, 0)
+        prov_layout.addWidget(QLabel("Ngôn ngữ đích (Target Lang):"), 1, 0)
+        self.combo_target_lang = QComboBox()
+        for item in SUPPORTED_TARGET_LANGUAGES:
+            self.combo_target_lang.addItem(item["name"], item["code"])
+        self.combo_target_lang.currentIndexChanged.connect(self._on_target_lang_combo_changed)
+        prov_layout.addWidget(self.combo_target_lang, 1, 1)
+
+        prov_layout.addWidget(QLabel("Giọng đọc (Voice):"), 2, 0)
         self.combo_voice = QComboBox()
-        self._populate_voices("edge_tts")
-        prov_layout.addWidget(self.combo_voice, 1, 1)
+        self._populate_voices("edge_tts", target_lang=self.target_language)
+        prov_layout.addWidget(self.combo_voice, 2, 1)
 
         self.btn_open_cloning = QPushButton("✨ Nhân bản Giọng mới (Voice Cloning)...")
         self.btn_open_cloning.setStyleSheet(
@@ -58,7 +73,7 @@ class VoicePage(QWidget):
         )
         self.btn_open_cloning.setToolTip("Ghi âm trực tiếp từ Mic hoặc import file 3-8s để tạo giọng clone")
         self.btn_open_cloning.clicked.connect(self._open_voice_cloning_dialog)
-        prov_layout.addWidget(self.btn_open_cloning, 2, 0, 1, 2)
+        prov_layout.addWidget(self.btn_open_cloning, 3, 0, 1, 2)
 
         left_col.addWidget(prov_group)
 
@@ -130,15 +145,40 @@ class VoicePage(QWidget):
 
     def set_project(self, project: ProjectData):
         self.current_project = project
+        if hasattr(project, "target_language") and project.target_language:
+            self.set_target_language(project.target_language)
+
+    def set_target_language(self, lang_code: str):
+        self.target_language = lang_code
+        idx = self.combo_target_lang.findData(lang_code)
+        if idx >= 0 and self.combo_target_lang.currentIndex() != idx:
+            self.combo_target_lang.blockSignals(True)
+            self.combo_target_lang.setCurrentIndex(idx)
+            self.combo_target_lang.blockSignals(False)
+        backend = self.combo_backend.currentData()
+        self._populate_voices(backend, target_lang=lang_code)
+
+    def _on_target_lang_combo_changed(self):
+        target_lang = self.combo_target_lang.currentData() or "vi"
+        self.target_language = target_lang
+        if self.current_project:
+            self.current_project.target_language = target_lang
+        backend = self.combo_backend.currentData()
+        self._populate_voices(backend, target_lang=target_lang)
+        self.target_language_changed.emit(target_lang)
 
     def _on_backend_changed(self):
         backend = self.combo_backend.currentData()
-        self._populate_voices(backend)
+        self._populate_voices(backend, target_lang=self.target_language)
 
-    def _populate_voices(self, backend: str, select_voice: Optional[str] = None):
+    def _populate_voices(self, backend: str, select_voice: Optional[str] = None, target_lang: Optional[str] = None):
+        lang = target_lang or self.target_language or "vi"
         self.combo_voice.clear()
         if backend == "edge_tts":
-            for v in EDGE_TTS_VIETNAMESE_VOICES:
+            from app.providers.edge_tts_provider import EdgeTTSProvider
+            provider = EdgeTTSProvider()
+            voices = provider.get_voices(target_lang=lang)
+            for v in voices:
                 self.combo_voice.addItem(f"{v['name']}", v["id"])
         elif backend in ("vieneu", "vieneu_nano"):
             from app.providers.vieneu_tts_provider import VieNeuTTSProvider
@@ -168,7 +208,7 @@ class VoicePage(QWidget):
         idx = self.combo_backend.findData("vieneu")
         if idx >= 0:
             self.combo_backend.setCurrentIndex(idx)
-        self._populate_voices("vieneu", select_voice=new_voice_name)
+        self._populate_voices("vieneu", select_voice=new_voice_name, target_lang=self.target_language)
 
     def _get_options(self) -> dict:
         rate_str = self.combo_rate.currentText().split()[0]
@@ -180,7 +220,8 @@ class VoicePage(QWidget):
             "pitch": pitch_str,
             "volume": vol_str,
             "style": self.combo_style.currentText(),
-            "max_workers": max_workers
+            "max_workers": max_workers,
+            "target_lang": self.target_language
         }
 
     def _test_voice(self):

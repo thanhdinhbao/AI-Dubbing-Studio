@@ -25,12 +25,19 @@ class EdgeTTSProvider(BaseTTSProvider):
             "supports_rate": True,
             "supports_volume": True,
             "is_offline": False,
-            "description": "Microsoft Edge TTS (Chất lượng cao, phát âm tiếng Việt tự nhiên)"
+            "description": "Microsoft Edge TTS (Hỗ trợ đa ngôn ngữ chất lượng cao)"
         }
 
-    def get_voices(self) -> List[Dict[str, Any]]:
-        """Return Vietnamese voices supported by Edge TTS."""
-        return list(EDGE_TTS_VIETNAMESE_VOICES)
+    def get_voices(self, target_lang: str = "vi") -> List[Dict[str, Any]]:
+        """Return voices supported by Edge TTS for the target language."""
+        from app.constants import EDGE_TTS_VOICES_BY_LANG
+        lang_code = (target_lang or "vi").strip().lower()
+        if lang_code in ("zh", "zh-cn", "chinese"):
+            lang_code = "zh-CN"
+        if lang_code in EDGE_TTS_VOICES_BY_LANG:
+            return list(EDGE_TTS_VOICES_BY_LANG[lang_code])
+        # If not found, return all Vietnamese or English voices
+        return list(EDGE_TTS_VOICES_BY_LANG.get("vi", []))
 
     def synthesize(
         self,

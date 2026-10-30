@@ -59,8 +59,17 @@ class VideoRendererService:
         logger.info(f"Preparing video render with codec '{self.video_codec}' preset '{self.preset}' to: {output_video_path}")
         ffmpeg_bin = get_ffmpeg_path()
 
-        # Build combined video intervals from timeline
-        video_actions = []
+        # Probe source video FPS to ensure smooth, uniform frame presentation without micro-stutters
+        source_fps = 30.0
+        try:
+            probe_info = MediaProbeService.probe_media(source_video_path)
+            if probe_info.fps and probe_info.fps > 0:
+                source_fps = round(probe_info.fps, 3)
+        except Exception as e:
+            logger.warning(f"Could not probe source video FPS, defaulting to 30.0: {e}")
+
+        # 1. Build raw video intervals from timeline
+        raw_video_actions = []
         i = 0
         while i < len(timeline):
             seg = timeline[i]
@@ -71,49 +80,86 @@ class VideoRendererService:
                     delta = timeline[i + 1].duration
                     i += 1  # consume freeze segment
 
-                video_actions.append({
+                raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
                     "pad_duration": delta
                 })
             elif seg.segment_type == "gap":
-                video_actions.append({
+                raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
                     "pad_duration": 0.0
                 })
             elif seg.segment_type == "video_freeze":
-                video_actions.append({
+                raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
                     "pad_duration": seg.duration
                 })
             i += 1
 
-        filter_lines = []
-        stream_labels = []
+        # 2. Coalesce adjacent continuous intervals where no freeze padding is needed
+        # This prevents unnecessary cutting/slicing of GOPs at subtitle boundaries, eliminating micro-stutters
+        video_actions = []
+        for act in raw_video_actions:
+            if act["end"] <= act["start"]:
+                continue
+            if not video_actions:
+                video_actions.append(dict(act))
+                continue
 
-        for idx, act in enumerate(video_actions):
+            prev = video_actions[-1]
+            if prev["pad_duration"] <= 0.005 and abs(act["start"] - prev["end"]) < 0.05:
+                # Merge current seamlessly into previous
+                prev["end"] = act["end"]
+                prev["pad_duration"] = act["pad_duration"]
+            else:
+                video_actions.append(dict(act))
+
+        # 3. Construct filtergraph
+        if len(video_actions) <= 1:
+            act = video_actions[0] if video_actions else {"start": 0.0, "end": 1.0, "pad_duration": 0.0}
             s = act["start"]
             e = max(s + 0.001, act["end"])
             pad = act["pad_duration"]
-
-            label = f"v{idx}"
-            stream_labels.append(f"[{label}]")
-
             if pad > 0.005:
-                # Trim clip and clone last frame for pad duration
-                fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={pad:.4f}[{label}];"
+                filter_script_content = (
+                    f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,"
+                    f"tpad=stop_mode=clone:stop_duration={pad:.4f},"
+                    f"fps=fps={source_fps}:round=near,settb=AVTB,setpts=PTS-STARTPTS[v_out]"
+                )
             else:
-                fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS[{label}];"
+                filter_script_content = (
+                    f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,"
+                    f"fps=fps={source_fps}:round=near,settb=AVTB,setpts=PTS-STARTPTS[v_out]"
+                )
+        else:
+            filter_lines = []
+            stream_labels = []
 
-            filter_lines.append(fl)
+            for idx, act in enumerate(video_actions):
+                s = act["start"]
+                e = max(s + 0.001, act["end"])
+                pad = act["pad_duration"]
 
-        # Concatenate all video streams
-        concat_filter = f"{''.join(stream_labels)}concat=n={len(stream_labels)}:v=1:a=0[v_out]"
-        filter_lines.append(concat_filter)
+                label = f"v{idx}"
+                stream_labels.append(f"[{label}]")
 
-        filter_script_content = "\n".join(filter_lines)
+                if pad > 0.005:
+                    fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={pad:.4f}[{label}];"
+                else:
+                    fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS[{label}];"
+
+                filter_lines.append(fl)
+
+            # Concatenate all video streams and apply fps CFR normalization with strictly monotonic PTS
+            concat_filter = (
+                f"{''.join(stream_labels)}concat=n={len(stream_labels)}:v=1:a=0,"
+                f"fps=fps={source_fps}:round=near,settb=AVTB,setpts=PTS-STARTPTS[v_out]"
+            )
+            filter_lines.append(concat_filter)
+            filter_script_content = "\n".join(filter_lines)
 
         # Write filter script to temporary file to avoid command length limits on Windows
         temp_filter_file = Path(output_video_path).parent / f"filter_complex_{os.getpid()}.txt"
@@ -140,7 +186,8 @@ class VideoRendererService:
                 "-c:v", self.video_codec,
                 "-preset", nvenc_preset,
                 "-cq", str(self.crf),
-                "-spatial_aq", "1"
+                "-spatial_aq", "1",
+                "-pix_fmt", "yuv420p"
             ]
         else:
             # CPU Software Encoding (libx264, libx265)
@@ -148,10 +195,11 @@ class VideoRendererService:
                 "-c:v", self.video_codec,
                 "-crf", str(self.crf),
                 "-preset", self.preset,
-                "-threads", str(self.threads)
+                "-threads", str(self.threads),
+                "-pix_fmt", "yuv420p"
             ]
 
-        # Build FFmpeg command with thread buffers and multi-threaded filtergraph
+        # Build FFmpeg command with thread buffers, multi-threaded filtergraph, and CFR mode
         cmd = [
             ffmpeg_bin,
             "-y",
@@ -164,6 +212,8 @@ class VideoRendererService:
             "-map", "[v_out]",
             "-map", "1:a"
         ] + codec_args + [
+            "-fps_mode", "cfr",
+            "-avoid_negative_ts", "make_zero",
             "-c:a", self.audio_codec,
             "-b:a", self.audio_bitrate,
             "-shortest",
