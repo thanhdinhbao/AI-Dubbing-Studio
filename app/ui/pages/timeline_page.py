@@ -62,8 +62,10 @@ class TimelinePage(QWidget):
         # Visual Extension Mode
         h_layout.addWidget(QLabel("Xử lý hình ảnh khi câu thoại dài hơn:"), 2, 0)
         self.combo_extend_mode = QComboBox()
-        self.combo_extend_mode.addItem("Đóng băng khung hình cuối (Freeze Last Frame - Chuẩn)", VisualExtendMode.FREEZE_LAST_FRAME)
-        self.combo_extend_mode.addItem("Đệm khoảng dừng tự nhiên (Hold and Pad)", VisualExtendMode.HOLD_AND_PAD)
+        self.combo_extend_mode.addItem("Đệm khoảng dừng & Chuyển động mượt mà (Hold and Pad - Khuyến nghị, video mượt mà không khựng)", VisualExtendMode.HOLD_AND_PAD)
+        self.combo_extend_mode.addItem("Làm chậm mượt chuyển động câu dài (Smooth Slow-Mo - Chuyển động liên tục)", VisualExtendMode.SPEED_ADJUST)
+        self.combo_extend_mode.addItem("Đóng băng khung hình cuối (Freeze Last Frame - Đứng hình khi câu thoại dài hơn)", VisualExtendMode.FREEZE_LAST_FRAME)
+        self.combo_extend_mode.currentIndexChanged.connect(self._on_extend_mode_changed)
         h_layout.addWidget(self.combo_extend_mode, 2, 1)
 
         self.btn_rebuild = QPushButton("🔄 Tính toán & Dựng lại Timeline")
@@ -113,6 +115,19 @@ class TimelinePage(QWidget):
             source_duration=src_dur,
             output_duration=out_dur
         )
+
+        # Synchronize extend mode dropdown
+        ext_mode = getattr(project, "visual_extend_mode", VisualExtendMode.HOLD_AND_PAD)
+        idx = self.combo_extend_mode.findData(ext_mode)
+        if idx >= 0:
+            self.combo_extend_mode.blockSignals(True)
+            self.combo_extend_mode.setCurrentIndex(idx)
+            self.combo_extend_mode.blockSignals(False)
+
+    def _on_extend_mode_changed(self):
+        if self.current_project and self.current_project.dialogues:
+            self.current_project.visual_extend_mode = self.combo_extend_mode.currentData()
+            self._rebuild_timeline()
 
     def _rebuild_timeline(self):
         if not self.current_project or not self.current_project.dialogues:

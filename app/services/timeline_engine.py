@@ -63,36 +63,100 @@ class TimelineEngine:
             if self.mode == TimelineMode.DYNAMIC_DURATION:
                 if tts_dur > source_dur:
                     # TTS is longer than original audio: DYNAMIC EXPANSION
-                    # Segment 2a: Normal video playback of original dialogue
-                    seg_normal = TimelineSegment(
-                        dialogue_id=dlg.id,
-                        segment_type="video_normal",
-                        source_start=dlg_start,
-                        source_end=dlg_end,
-                        output_start=current_output_time,
-                        output_end=current_output_time + source_dur,
-                        duration=source_dur,
-                        tts_audio_path=dlg.tts_audio_path,
-                        action="normal"
-                    )
-                    timeline_segments.append(seg_normal)
-                    current_output_time += source_dur
-
-                    # Segment 2b: Visual freeze/hold block for the extra time delta
                     delta = tts_dur - source_dur
-                    seg_freeze = TimelineSegment(
-                        dialogue_id=dlg.id,
-                        segment_type="video_freeze",
-                        source_start=dlg_end,
-                        source_end=dlg_end,
-                        output_start=current_output_time,
-                        output_end=current_output_time + delta,
-                        duration=delta,
-                        tts_audio_path=None,
-                        action="freeze_frame"
-                    )
-                    timeline_segments.append(seg_freeze)
-                    current_output_time += delta
+
+                    if extend_mode in (VisualExtendMode.HOLD_AND_PAD, VisualExtendMode.SPEED_ADJUST):
+                        # Smart Gap Absorption + Smooth Motion Stretch (ZERO STATIC FREEZE FRAMES)
+                        next_source_start = (
+                            sorted_dialogues[idx + 1].start
+                            if (idx + 1 < len(sorted_dialogues))
+                            else source_duration
+                        )
+                        available_gap = max(0.0, next_source_start - dlg_end)
+
+                        if extend_mode == VisualExtendMode.HOLD_AND_PAD and available_gap > 0.05:
+                            absorbed = min(delta, available_gap)
+                            remaining_delta = delta - absorbed
+                        else:
+                            absorbed = 0.0
+                            remaining_delta = delta
+
+                        # Segment 2a: Dialogue video with continuous motion (stretched smoothly if needed)
+                        if remaining_delta > 0.05:
+                            seg_dur = source_dur + remaining_delta
+                            seg_normal = TimelineSegment(
+                                dialogue_id=dlg.id,
+                                segment_type="video_normal",
+                                source_start=dlg_start,
+                                source_end=dlg_end,
+                                output_start=current_output_time,
+                                output_end=current_output_time + seg_dur,
+                                duration=seg_dur,
+                                tts_audio_path=dlg.tts_audio_path,
+                                action="speed_adjust"
+                            )
+                        else:
+                            seg_normal = TimelineSegment(
+                                dialogue_id=dlg.id,
+                                segment_type="video_normal",
+                                source_start=dlg_start,
+                                source_end=dlg_end,
+                                output_start=current_output_time,
+                                output_end=current_output_time + source_dur,
+                                duration=source_dur,
+                                tts_audio_path=dlg.tts_audio_path,
+                                action="normal"
+                            )
+                        timeline_segments.append(seg_normal)
+                        current_output_time += seg_normal.duration
+                        current_source_time = max(current_source_time, dlg_end)
+
+                        # Segment 2b: Absorbed natural gap video (normal continuous motion)
+                        if absorbed > 0.001:
+                            seg_gap_absorb = TimelineSegment(
+                                dialogue_id=None,
+                                segment_type="gap",
+                                source_start=dlg_end,
+                                source_end=dlg_end + absorbed,
+                                output_start=current_output_time,
+                                output_end=current_output_time + absorbed,
+                                duration=absorbed,
+                                action="normal"
+                            )
+                            timeline_segments.append(seg_gap_absorb)
+                            current_output_time += absorbed
+                            current_source_time = dlg_end + absorbed
+
+                    else:
+                        # Standard FREEZE_LAST_FRAME: visual freeze at dialogue end
+                        seg_normal = TimelineSegment(
+                            dialogue_id=dlg.id,
+                            segment_type="video_normal",
+                            source_start=dlg_start,
+                            source_end=dlg_end,
+                            output_start=current_output_time,
+                            output_end=current_output_time + source_dur,
+                            duration=source_dur,
+                            tts_audio_path=dlg.tts_audio_path,
+                            action="normal"
+                        )
+                        timeline_segments.append(seg_normal)
+                        current_output_time += source_dur
+
+                        seg_freeze = TimelineSegment(
+                            dialogue_id=dlg.id,
+                            segment_type="video_freeze",
+                            source_start=dlg_end,
+                            source_end=dlg_end,
+                            output_start=current_output_time,
+                            output_end=current_output_time + delta,
+                            duration=delta,
+                            tts_audio_path=None,
+                            action="freeze_frame"
+                        )
+                        timeline_segments.append(seg_freeze)
+                        current_output_time += delta
+                        current_source_time = max(current_source_time, dlg_end)
 
                 elif tts_dur < source_dur and allow_contraction:
                     # Contracted playback if explicitly enabled
@@ -140,7 +204,7 @@ class TimelineEngine:
                 timeline_segments.append(seg_fixed)
                 current_output_time += source_dur
 
-            current_source_time = dlg_end
+            current_source_time = max(current_source_time, dlg_end)
 
         # 3. Handle trailing video segment after last dialogue
         if current_source_time < source_duration:

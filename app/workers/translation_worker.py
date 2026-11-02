@@ -44,4 +44,10 @@ class TranslationWorker(BaseWorker):
         except Exception as e:
             logger.error(f"Translation worker failed: {e}")
             self.error.emit(str(e))
+        finally:
+            if hasattr(self.provider, "close"):
+                try:
+                    self.provider.close()
+                except Exception as ex:
+                    logger.debug(f"Provider close error: {ex}")
 

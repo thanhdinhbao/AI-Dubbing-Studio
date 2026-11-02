@@ -110,3 +110,60 @@ def test_mandatory_3_multiple_consecutive_sentences():
     found_ids = [s.dialogue_id for s in timeline if s.dialogue_id]
     for expected_id in ["s1", "s2", "s3", "s4", "s5"]:
         assert expected_id in found_ids
+
+
+def test_smart_gap_absorption_hold_and_pad():
+    """Verify HOLD_AND_PAD absorbs extra TTS duration into natural gaps without freeze frames."""
+    engine = TimelineEngine(mode=TimelineMode.DYNAMIC_DURATION)
+    # Sentence 1: 0.0s to 2.0s, TTS = 2.8s (+0.8s)
+    # Sentence 2: 5.0s to 7.0s (3.0s gap between 2.0s and 5.0s)
+    dlgs = [
+        DialogueSegment(id="d1", start=0.0, end=2.0, source_text="Sentence 1", tts_duration=2.8),
+        DialogueSegment(id="d2", start=5.0, end=7.0, source_text="Sentence 2", tts_duration=2.0),
+    ]
+    timeline = engine.build_timeline(
+        source_duration=10.0,
+        dialogues=dlgs,
+        options={"visual_extend_mode": VisualExtendMode.HOLD_AND_PAD}
+    )
+    engine.validate_timeline(timeline)
+
+    # Because gap was 3.0s (> 0.8s extra), zero freeze frames are needed!
+    freezes = [s for s in timeline if s.segment_type == "video_freeze"]
+    assert len(freezes) == 0
+
+    # Total duration stays 10.0s because extra duration was smoothly absorbed into natural gap!
+    out_dur = engine.calculate_output_duration(timeline)
+    assert abs(out_dur - 10.0) < 0.01
+
+
+def test_hold_and_pad_zero_gap_continuous_motion():
+    """Verify that when sentences have 0s gap, HOLD_AND_PAD produces ZERO freeze frames
+    and uses smooth motion stretching (speed_adjust) instead of freezing.
+    """
+    engine = TimelineEngine(mode=TimelineMode.DYNAMIC_DURATION)
+    # Sentence 1: 0.0s to 5.0s, TTS = 7.0s (+2.0s)
+    # Sentence 2: 5.0s to 10.0s (0s gap!), TTS = 6.0s (+1.0s)
+    dlgs = [
+        DialogueSegment(id="d1", start=0.0, end=5.0, source_text="Sentence 1", tts_duration=7.0),
+        DialogueSegment(id="d2", start=5.0, end=10.0, source_text="Sentence 2", tts_duration=6.0),
+    ]
+    timeline = engine.build_timeline(
+        source_duration=10.0,
+        dialogues=dlgs,
+        options={"visual_extend_mode": VisualExtendMode.HOLD_AND_PAD}
+    )
+    engine.validate_timeline(timeline)
+
+    # Must have ZERO freeze frames!
+    freezes = [s for s in timeline if s.segment_type == "video_freeze"]
+    assert len(freezes) == 0
+
+    # Segments must be marked with speed_adjust for smooth continuous motion
+    stretches = [s for s in timeline if s.action == "speed_adjust"]
+    assert len(stretches) == 2
+
+    # Total duration expands from 10.0s to 13.0s (7.0s + 6.0s)
+    out_dur = engine.calculate_output_duration(timeline)
+    assert abs(out_dur - 13.0) < 0.01
+

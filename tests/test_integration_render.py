@@ -129,3 +129,53 @@ def test_mandatory_4_and_5_real_render_pipeline(sample_media_workspace):
     assert abs(report["duration"] - 6.0) < 0.5
     assert report["file_size_mb"] > 0.0
 
+
+def test_hold_and_pad_render_smooth_motion(sample_media_workspace):
+    """Verify end-to-end rendering with HOLD_AND_PAD produces a valid, smooth output video."""
+    from app.constants import VisualExtendMode
+    ws = sample_media_workspace
+    source_video = ws["source_video"]
+    tts1 = ws["tts1"]
+
+    info = MediaProbeService.probe_media(source_video)
+
+    # 1 dialogue with extra duration
+    dlgs = [
+        DialogueSegment(id="d1", start=1.0, end=2.5, source_text="Sentence 1", target_text="Câu một", tts_duration=3.5, tts_audio_path=tts1),
+    ]
+
+    engine = TimelineEngine(mode=TimelineMode.DYNAMIC_DURATION)
+    timeline = engine.build_timeline(
+        source_duration=info.duration,
+        dialogues=dlgs,
+        options={"visual_extend_mode": VisualExtendMode.HOLD_AND_PAD}
+    )
+    output_dur = engine.calculate_output_duration(timeline)
+
+    # Zero freeze frames in HOLD_AND_PAD
+    assert len([s for s in timeline if s.segment_type == "video_freeze"]) == 0
+
+    mixed_wav = os.path.join(ws["dir"], "hold_pad_mix.wav")
+    mixer = AudioMixerService(bg_volume=0.0)
+    mixer.mix_timeline_audio(
+        timeline=timeline,
+        output_duration=output_dur,
+        output_wav_path=mixed_wav,
+        background_wav_path=None
+    )
+
+    output_video = os.path.join(ws["dir"], "hold_pad_rendered.mp4")
+    renderer = VideoRendererService(video_codec="libx264", audio_codec="aac", crf=22, preset="ultrafast")
+    renderer.render(
+        source_video_path=source_video,
+        mixed_audio_path=mixed_wav,
+        timeline=timeline,
+        output_video_path=output_video
+    )
+
+    assert os.path.exists(output_video)
+    valid, report = MediaValidatorService.validate_rendered_output(output_video, expected_duration=output_dur, duration_tolerance_sec=0.5)
+    assert valid is True
+    assert report["valid"] is True
+
+

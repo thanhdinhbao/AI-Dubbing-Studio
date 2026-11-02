@@ -14,6 +14,40 @@ logger = logging.getLogger("AIDubbingStudio.FFmpegUtils")
 # Cache resolved paths
 _FFMPEG_PATH: Optional[str] = None
 _FFPROBE_PATH: Optional[str] = None
+_ENCODER_SUPPORT_CACHE: Dict[str, bool] = {}
+
+
+def is_encoder_supported(encoder_name: str) -> bool:
+    """Check if a video encoder is genuinely supported and operational in current FFmpeg/GPU driver."""
+    if not encoder_name:
+        return False
+    if encoder_name in _ENCODER_SUPPORT_CACHE:
+        return _ENCODER_SUPPORT_CACHE[encoder_name]
+
+    try:
+        ffmpeg_p = get_ffmpeg_path()
+        cmd = [
+            ffmpeg_p, "-y",
+            "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.04",
+            "-c:v", encoder_name,
+            "-frames:v", "1",
+            "-f", "null", "-"
+        ]
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            creationflags=flags,
+            timeout=5
+        )
+        supported = (res.returncode == 0)
+        _ENCODER_SUPPORT_CACHE[encoder_name] = supported
+        return supported
+    except Exception as e:
+        logger.warning(f"Failed to probe encoder {encoder_name}: {e}")
+        _ENCODER_SUPPORT_CACHE[encoder_name] = False
+        return False
 
 
 def set_custom_ffmpeg_paths(ffmpeg_path: Optional[str], ffprobe_path: Optional[str] = None):

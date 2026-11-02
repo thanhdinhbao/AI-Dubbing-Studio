@@ -3,6 +3,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from app.workers.base_worker import BaseWorker
 from app.models import TimelineSegment
+from app.constants import AudioSeparationMode
 from app.services.audio_mixer import AudioMixerService
 from app.services.video_renderer import VideoRendererService
 from app.services.media_validator import MediaValidatorService
@@ -38,9 +39,16 @@ class RenderWorker(BaseWorker):
             self.progress.emit(10, "Đang hòa âm lời thoại tiếng Việt và nhạc nền...")
             mixed_wav_path = os.path.join(self.workspace_dir, "audio", "final_mixed_audio.wav")
 
+            sep_mode = self.render_settings.get("separation_mode", "")
             bg_vol = float(self.render_settings.get("bg_music_volume", 0.25))
             tts_gain = float(self.render_settings.get("tts_volume_gain", 1.0))
             ducking_reduction = float(self.render_settings.get("ducking_reduction", 0.2))
+
+            # Strictly eliminate background track if MUTE_ORIGINAL or volume is 0
+            bg_audio_path = self.background_audio_path
+            if sep_mode == AudioSeparationMode.MUTE_ORIGINAL or bg_vol <= 0.001:
+                bg_vol = 0.0
+                bg_audio_path = None
 
             mixer = AudioMixerService(
                 bg_volume=bg_vol,
@@ -56,7 +64,7 @@ class RenderWorker(BaseWorker):
                 timeline=self.timeline,
                 output_duration=self.output_duration,
                 output_wav_path=mixed_wav_path,
-                background_wav_path=self.background_audio_path,
+                background_wav_path=bg_audio_path,
                 on_progress=on_mix_prog,
                 cancel_event=self.cancel_event
             )

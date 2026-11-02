@@ -8,7 +8,7 @@ from typing import List, Optional, Callable, Dict, Any
 
 from app.models import TimelineSegment
 from app.exceptions import RenderError
-from app.utils.ffmpeg_utils import get_ffmpeg_path, run_ffmpeg_process
+from app.utils.ffmpeg_utils import get_ffmpeg_path, run_ffmpeg_process, is_encoder_supported
 from app.services.media_probe import MediaProbeService
 
 logger = logging.getLogger("AIDubbingStudio.VideoRenderer")
@@ -83,50 +83,84 @@ class VideoRendererService:
                 raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
-                    "pad_duration": delta
+                    "target_duration": seg.duration + delta,
+                    "pad_duration": delta,
+                    "action": seg.action
                 })
             elif seg.segment_type == "gap":
                 raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
-                    "pad_duration": 0.0
+                    "target_duration": seg.duration,
+                    "pad_duration": 0.0,
+                    "action": "normal"
                 })
             elif seg.segment_type == "video_freeze":
                 raw_video_actions.append({
                     "start": seg.source_start,
                     "end": seg.source_end,
-                    "pad_duration": seg.duration
+                    "target_duration": seg.duration,
+                    "pad_duration": seg.duration,
+                    "action": "freeze_frame"
                 })
             i += 1
 
-        # 2. Coalesce adjacent continuous intervals where no freeze padding is needed
+        # 2. Coalesce adjacent continuous intervals where no speed adjustment or freeze padding is needed
         # This prevents unnecessary cutting/slicing of GOPs at subtitle boundaries, eliminating micro-stutters
         video_actions = []
         for act in raw_video_actions:
             if act["end"] <= act["start"]:
+                # If it's a standalone freeze frame (end == start):
+                if act.get("pad_duration", 0) > 0.05 and video_actions:
+                    video_actions[-1]["pad_duration"] += act["pad_duration"]
+                    video_actions[-1]["target_duration"] += act["pad_duration"]
                 continue
+
             if not video_actions:
                 video_actions.append(dict(act))
                 continue
 
             prev = video_actions[-1]
-            if prev["pad_duration"] <= 0.005 and abs(act["start"] - prev["end"]) < 0.05:
+            src_prev = prev["end"] - prev["start"]
+            src_curr = act["end"] - act["start"]
+            is_prev_normal = (
+                prev.get("action") == "normal"
+                and prev.get("pad_duration", 0) <= 0.05
+                and abs(prev.get("target_duration", src_prev) - src_prev) < 0.05
+            )
+            is_curr_normal = (
+                act.get("action") == "normal"
+                and act.get("pad_duration", 0) <= 0.05
+                and abs(act.get("target_duration", src_curr) - src_curr) < 0.05
+            )
+
+            if is_prev_normal and is_curr_normal and abs(act["start"] - prev["end"]) < 0.05:
                 # Merge current seamlessly into previous
                 prev["end"] = act["end"]
-                prev["pad_duration"] = act["pad_duration"]
+                prev["target_duration"] = prev["end"] - prev["start"]
             else:
                 video_actions.append(dict(act))
 
         # 3. Construct filtergraph
         if len(video_actions) <= 1:
-            act = video_actions[0] if video_actions else {"start": 0.0, "end": 1.0, "pad_duration": 0.0}
+            act = video_actions[0] if video_actions else {"start": 0.0, "end": 1.0, "target_duration": 1.0, "action": "normal", "pad_duration": 0.0}
             s = act["start"]
             e = max(s + 0.001, act["end"])
-            pad = act["pad_duration"]
-            if pad > 0.005:
+            src_dur = e - s
+            tgt_dur = act.get("target_duration", src_dur)
+            action = act.get("action", "normal")
+            pad = act.get("pad_duration", 0.0)
+
+            if action == "freeze_frame" and pad > 0.05:
                 filter_script_content = (
                     f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,"
                     f"tpad=stop_mode=clone:stop_duration={pad:.4f},"
+                    f"fps=fps={source_fps}:round=near,settb=AVTB,setpts=PTS-STARTPTS[v_out]"
+                )
+            elif tgt_dur > src_dur + 0.05:
+                factor = tgt_dur / src_dur
+                filter_script_content = (
+                    f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=(PTS-STARTPTS)*{factor:.4f},"
                     f"fps=fps={source_fps}:round=near,settb=AVTB,setpts=PTS-STARTPTS[v_out]"
                 )
             else:
@@ -141,13 +175,19 @@ class VideoRendererService:
             for idx, act in enumerate(video_actions):
                 s = act["start"]
                 e = max(s + 0.001, act["end"])
-                pad = act["pad_duration"]
+                src_dur = e - s
+                tgt_dur = act.get("target_duration", src_dur)
+                action = act.get("action", "normal")
+                pad = act.get("pad_duration", 0.0)
 
                 label = f"v{idx}"
                 stream_labels.append(f"[{label}]")
 
-                if pad > 0.005:
+                if action == "freeze_frame" and pad > 0.05:
                     fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={pad:.4f}[{label}];"
+                elif tgt_dur > src_dur + 0.05:
+                    factor = tgt_dur / src_dur
+                    fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=(PTS-STARTPTS)*{factor:.4f}[{label}];"
                 else:
                     fl = f"[0:v]trim=start={s:.4f}:end={e:.4f},setpts=PTS-STARTPTS[{label}];"
 
@@ -168,61 +208,66 @@ class VideoRendererService:
 
         total_output_duration = timeline[-1].output_end
 
-        # Codec specific encoding options
-        vcodec = self.video_codec.lower()
-        codec_args = []
+        # Codec validation and graceful fallback
+        chosen_codec = self.video_codec
+        if "nvenc" in chosen_codec.lower() and not is_encoder_supported(chosen_codec):
+            logger.warning(
+                f"GPU NVENC encoder '{chosen_codec}' không tương thích với driver hiện tại hoặc không khả dụng. "
+                "Tự động chuyển đổi sang mã hóa CPU đa luồng 'libx264'."
+            )
+            chosen_codec = "libx264"
 
-        if "nvenc" in vcodec:
-            # NVIDIA NVENC Hardware Encoding
-            nvenc_preset = "p4"
-            if self.preset in ("ultrafast", "veryfast"):
-                nvenc_preset = "p1"
-            elif self.preset in ("faster", "fast"):
-                nvenc_preset = "p3"
-            elif self.preset in ("medium", "slow"):
+        def _build_ffmpeg_cmd(vcodec_name: str) -> List[str]:
+            v_low = vcodec_name.lower()
+            if "nvenc" in v_low:
+                # NVIDIA NVENC Hardware Encoding
                 nvenc_preset = "p4"
+                if self.preset in ("ultrafast", "veryfast"):
+                    nvenc_preset = "p1"
+                elif self.preset in ("faster", "fast"):
+                    nvenc_preset = "p3"
+                elif self.preset in ("medium", "slow"):
+                    nvenc_preset = "p4"
 
-            codec_args = [
-                "-c:v", self.video_codec,
-                "-preset", nvenc_preset,
-                "-cq", str(self.crf),
-                "-spatial_aq", "1",
-                "-pix_fmt", "yuv420p"
+                codec_args = [
+                    "-c:v", vcodec_name,
+                    "-preset", nvenc_preset,
+                    "-cq", str(self.crf),
+                    "-pix_fmt", "yuv420p"
+                ]
+            else:
+                # CPU Software Encoding (libx264, libx265)
+                codec_args = [
+                    "-c:v", vcodec_name,
+                    "-crf", str(self.crf),
+                    "-preset", self.preset,
+                    "-threads", str(self.threads),
+                    "-pix_fmt", "yuv420p"
+                ]
+
+            return [
+                ffmpeg_bin,
+                "-y",
+                "-thread_queue_size", "1024",
+                "-i", source_video_path,
+                "-thread_queue_size", "1024",
+                "-i", mixed_audio_path,
+                "-filter_complex_threads", "0",
+                "-filter_complex", filter_script_content,
+                "-map", "[v_out]",
+                "-map", "1:a"
+            ] + codec_args + [
+                "-fps_mode", "cfr",
+                "-avoid_negative_ts", "make_zero",
+                "-c:a", self.audio_codec,
+                "-b:a", self.audio_bitrate,
+                "-shortest",
+                output_video_path
             ]
-        else:
-            # CPU Software Encoding (libx264, libx265)
-            codec_args = [
-                "-c:v", self.video_codec,
-                "-crf", str(self.crf),
-                "-preset", self.preset,
-                "-threads", str(self.threads),
-                "-pix_fmt", "yuv420p"
-            ]
 
-        # Build FFmpeg command with thread buffers, multi-threaded filtergraph, and CFR mode
-        cmd = [
-            ffmpeg_bin,
-            "-y",
-            "-thread_queue_size", "1024",
-            "-i", source_video_path,
-            "-thread_queue_size", "1024",
-            "-i", mixed_audio_path,
-            "-filter_complex_threads", "0",
-            "-filter_complex", filter_script_content,
-            "-map", "[v_out]",
-            "-map", "1:a"
-        ] + codec_args + [
-            "-fps_mode", "cfr",
-            "-avoid_negative_ts", "make_zero",
-            "-c:a", self.audio_codec,
-            "-b:a", self.audio_bitrate,
-            "-shortest",
-            output_video_path
-        ]
-
-        logger.info(f"Executing render for {total_output_duration:.2f}s output video...")
+        logger.info(f"Executing render with codec '{chosen_codec}' for {total_output_duration:.2f}s output video...")
         if on_progress:
-            on_progress(10, "Bắt đầu render video với FFmpeg...")
+            on_progress(10, f"Bắt đầu render video với FFmpeg ({chosen_codec})...")
 
         # Parse time progress from FFmpeg stderr
         def parse_progress(line: str):
@@ -235,14 +280,23 @@ class VideoRendererService:
                     on_progress(pct, f"Đang render: {curr_sec:.1f}s / {total_output_duration:.1f}s ({pct}%)")
 
         try:
-            run_ffmpeg_process(cmd, on_progress=parse_progress, cancel_event=cancel_event)
-
-            # Clean temp filter script
-            if temp_filter_file.exists():
-                try:
-                    temp_filter_file.unlink()
-                except Exception:
-                    pass
+            try:
+                cmd = _build_ffmpeg_cmd(chosen_codec)
+                run_ffmpeg_process(cmd, on_progress=parse_progress, cancel_event=cancel_event)
+            except Exception as ffmpeg_err:
+                if cancel_event and cancel_event.is_set():
+                    raise
+                if "nvenc" in chosen_codec.lower():
+                    logger.warning(
+                        f"Render với NVENC '{chosen_codec}' thất bại: {ffmpeg_err}. "
+                        "Tự động thử lại với CPU Software Encoding 'libx264'..."
+                    )
+                    if on_progress:
+                        on_progress(12, "NVENC gặp lỗi phần cứng/driver, đang chuyển đổi sang CPU libx264...")
+                    fallback_cmd = _build_ffmpeg_cmd("libx264")
+                    run_ffmpeg_process(fallback_cmd, on_progress=parse_progress, cancel_event=cancel_event)
+                else:
+                    raise
 
             if not os.path.exists(output_video_path) or os.path.getsize(output_video_path) == 0:
                 raise RenderError("Tệp video đầu ra không được tạo hoặc có dung lượng 0 bytes.")
@@ -254,11 +308,12 @@ class VideoRendererService:
             return output_video_path
 
         except Exception as e:
+            if cancel_event and cancel_event.is_set():
+                raise
+            raise RenderError(f"Render video thất bại: {e}")
+        finally:
             if temp_filter_file.exists():
                 try:
                     temp_filter_file.unlink()
                 except Exception:
                     pass
-            if cancel_event and cancel_event.is_set():
-                raise
-            raise RenderError(f"Render video thất bại: {e}")

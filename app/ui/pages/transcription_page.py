@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 
 from app.models import DialogueSegment, ProjectData
 from app.ui.widgets.subtitle_editor import SubtitleEditorWidget
-from app.constants import WHISPER_MODELS, SUPPORTED_TARGET_LANGUAGES
+from app.constants import WHISPER_MODELS, SUPPORTED_TARGET_LANGUAGES, TRANSLATION_STYLES
 
 logger = logging.getLogger("AIDubbingStudio.TranscriptionPage")
 
@@ -84,13 +84,21 @@ class TranscriptionPage(QWidget):
 
         trans_box.addWidget(QLabel("Bộ máy dịch:"))
         self.combo_trans_engine = QComboBox()
+        self.combo_trans_engine.addItem("⭐ Gemini Web API (Miễn phí qua Cookie)", "gemini_webapi")
         self.combo_trans_engine.addItem("Google Translate (Miễn phí / Không cần Key)", "google_free")
-        self.combo_trans_engine.addItem("Cloud API (OpenAI / DeepSeek / Gemini)", "openai_compatible")
+        self.combo_trans_engine.addItem("Cloud API (OpenAI / DeepSeek / Gemini API)", "openai_compatible")
         self.combo_trans_engine.addItem("Local Offline LLM (Ollama / LM Studio)", "local_llm")
+        self.combo_trans_engine.currentIndexChanged.connect(self._on_engine_changed)
         trans_box.addWidget(self.combo_trans_engine)
 
-        self.btn_config_trans = QPushButton("⚙ Cấu hình API")
-        self.btn_config_trans.setToolTip("Cấu hình API Key, Base URL hoặc Mô hình Ollama")
+        trans_box.addWidget(QLabel("Kiểu dịch:"))
+        self.combo_trans_style = QComboBox()
+        for st in TRANSLATION_STYLES:
+            self.combo_trans_style.addItem(st["name"], st["id"])
+        trans_box.addWidget(self.combo_trans_style)
+
+        self.btn_config_trans = QPushButton("⚙ Cấu hình API / Cookie")
+        self.btn_config_trans.setToolTip("Cấu hình Cookie Gemini, API Key Cloud, hoặc Mô hình Ollama")
         self.btn_config_trans.clicked.connect(self.config_requested.emit)
         trans_box.addWidget(self.btn_config_trans)
 
@@ -133,7 +141,15 @@ class TranscriptionPage(QWidget):
         self.subtitle_editor.update_dialogue_target_at(index, text)
 
     def _get_selected_backend(self) -> str:
-        return self.combo_trans_engine.currentData() or "google_free"
+        return self.combo_trans_engine.currentData() or "gemini_webapi"
+
+    def _get_selected_style(self) -> str:
+        return self.combo_trans_style.currentData() or "storytelling"
+
+    def _on_engine_changed(self):
+        backend = self._get_selected_backend()
+        # Highlight style dropdown for LLMs and Gemini
+        self.combo_trans_style.setEnabled(backend in ("gemini_webapi", "openai_compatible", "local_llm"))
 
     def _get_selected_target_lang(self) -> str:
         return self.combo_target_lang.currentData() or "vi"
@@ -160,7 +176,10 @@ class TranscriptionPage(QWidget):
             return
         backend = self._get_selected_backend()
         target_lang = self._get_selected_target_lang()
-        self.translation_requested.emit(backend, target_lang, {})
+        options = {
+            "trans_style": self._get_selected_style()
+        }
+        self.translation_requested.emit(backend, target_lang, options)
 
     def _on_translate_selected_clicked(self):
         row = self.subtitle_editor.get_selected_index()
@@ -169,6 +188,9 @@ class TranscriptionPage(QWidget):
             return
         backend = self._get_selected_backend()
         target_lang = self._get_selected_target_lang()
-        self.translate_single_requested.emit(row, backend, target_lang, {})
+        options = {
+            "trans_style": self._get_selected_style()
+        }
+        self.translate_single_requested.emit(row, backend, target_lang, options)
 
 

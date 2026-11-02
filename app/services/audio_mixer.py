@@ -111,25 +111,45 @@ class AudioMixerService:
                 except Exception as e:
                     logger.warning(f"Could not read dialogue audio {seg.tts_audio_path}: {e}")
 
-        # 2. Process background music / instrumental track if provided
+        # 2. Process background music / instrumental track if provided and volume > 0
         bg_track = np.zeros((total_samples, self.channels), dtype=np.float32)
 
-        if background_wav_path and os.path.exists(str(background_wav_path)):
+        if self.bg_volume > 0.001 and background_wav_path and os.path.exists(str(background_wav_path)):
             if on_progress:
-                on_progress(50, "Đang xử lý nhạc nền và ducking...")
+                on_progress(50, "Đang xử lý nhạc nền và đồng bộ timeline...")
 
             temp_bg_wav = str(output_wav_path.parent / "temp_bg_pcm.wav")
             self._convert_to_pcm_wav(str(background_wav_path), temp_bg_wav)
             bg_samples = self._read_wav_samples(temp_bg_wav)
+            bg_total_len = len(bg_samples)
 
-            # If output is longer than source bg, loop background with padding
-            bg_len = len(bg_samples)
-            if bg_len > 0:
-                copied = 0
-                while copied < total_samples:
-                    take = min(bg_len, total_samples - copied)
-                    bg_track[copied : copied + take] = bg_samples[:take]
-                    copied += take
+            if bg_total_len > 0:
+                # Map background track segment-by-segment exactly matching the video timeline
+                for seg in timeline:
+                    if seg.segment_type in ("video_normal", "gap"):
+                        src_s = max(0, int(round(seg.source_start * self.sample_rate)))
+                        src_e = min(bg_total_len, int(round(seg.source_end * self.sample_rate)))
+                        out_s = max(0, int(round(seg.output_start * self.sample_rate)))
+                        out_e = min(total_samples, int(round(seg.output_end * self.sample_rate)))
+
+                        take_src = max(0, src_e - src_s)
+                        take_out = max(0, out_e - out_s)
+                        take = min(take_src, take_out)
+                        if take > 0:
+                            bg_track[out_s : out_s + take] = bg_samples[src_s : src_s + take]
+
+                    elif seg.segment_type == "video_freeze":
+                        # During a freeze frame, smoothly fade out ambient sound over 0.25s
+                        # Avoid any clicking and NEVER loop or wrap around to the start of the audio!
+                        out_s = max(0, int(round(seg.output_start * self.sample_rate)))
+                        out_e = min(total_samples, int(round(seg.output_end * self.sample_rate)))
+                        freeze_len = out_e - out_s
+                        if freeze_len > 0 and out_s > 0:
+                            fade_len = min(freeze_len, int(0.25 * self.sample_rate))
+                            if fade_len > 0 and out_s >= fade_len:
+                                tail_samples = bg_track[out_s - fade_len : out_s]
+                                fade_window = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)[:, np.newaxis]
+                                bg_track[out_s : out_s + fade_len] = tail_samples * fade_window
 
             # Apply ducking envelope
             ducking_env = np.ones(total_samples, dtype=np.float32)

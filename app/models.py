@@ -39,7 +39,7 @@ class DialogueSegment(BaseModel):
     voice_id: str = ""
     status: str = DialogueStatus.PENDING
     error_message: Optional[str] = None
-    visual_extend_mode: str = VisualExtendMode.FREEZE_LAST_FRAME
+    visual_extend_mode: str = VisualExtendMode.HOLD_AND_PAD
 
     @property
     def source_duration(self) -> float:
@@ -81,6 +81,7 @@ class ProjectData(BaseModel):
     timeline_segments: List[TimelineSegment] = Field(default_factory=list)
     output_duration: float = 0.0
     timeline_mode: str = TimelineMode.DYNAMIC_DURATION
+    visual_extend_mode: str = VisualExtendMode.HOLD_AND_PAD
     separation_mode: str = AudioSeparationMode.DUCKING_ORIGINAL
     source_language: str = "auto"
     target_language: str = "vi"

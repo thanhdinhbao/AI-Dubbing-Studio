@@ -75,9 +75,14 @@ class SourceSeparationService:
             return None, str(instrumental_path)
 
         elif self.mode == AudioSeparationMode.MUTE_ORIGINAL:
-            # No background track used
+            # No background track used - clean up any stale instrumental stem
+            if instrumental_path.exists():
+                try:
+                    instrumental_path.unlink()
+                except Exception:
+                    pass
             if on_progress:
-                on_progress(100, "Chế độ tắt hoàn toàn âm thanh gốc.")
+                on_progress(100, "Chế độ tắt hoàn toàn âm thanh gốc (Chỉ giữ lời thoại TTS).")
             return None, None
 
         return None, str(instrumental_path)

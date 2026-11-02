@@ -14,7 +14,36 @@ WHISPER_DEVICES = ["cpu", "cuda"]
 WHISPER_COMPUTE_TYPES = ["int8", "float16", "float32", "default"]
 
 # Supported Translation Backends
-TRANSLATION_BACKENDS = ["openai_compatible", "offline_model"]
+TRANSLATION_BACKENDS = ["google_free", "gemini_webapi", "openai_compatible", "local_llm"]
+
+# Supported Translation Styles
+TRANSLATION_STYLES = [
+    {
+        "id": "storytelling",
+        "name": "Kể chuyện / Truyền cảm (Storytelling)",
+        "prompt": "Văn phong kể chuyện mượt mà, truyền cảm, giàu nhạc điệu và cảm xúc, phù hợp phim truyện, anime, truyện cổ tích."
+    },
+    {
+        "id": "news",
+        "name": "Tin tức / Phóng sự (News / Documentary)",
+        "prompt": "Văn phong tin tức trang trọng, chuẩn mực, khách quan, súc tích, gãy gọn, phù hợp bản tin thời sự và phim tài liệu."
+    },
+    {
+        "id": "natural",
+        "name": "Tự nhiên / Đời thường (Conversational)",
+        "prompt": "Khẩu ngữ tự nhiên, gần gũi, đời thường, ngôn từ chân thực như người bản xứ nói chuyện thường ngày, phù hợp vlog, podcast, phim sitcom."
+    },
+    {
+        "id": "cinematic",
+        "name": "Thuyết minh phim chiếu rạp (Cinematic)",
+        "prompt": "Nhịp điệu câu kịch tính, ngắn gọn, súc tích, khớp khẩu hình miệng và tiết tấu của nhân vật trong phim điện ảnh."
+    },
+    {
+        "id": "humorous",
+        "name": "Hài hước / Hóm hỉnh (Humorous)",
+        "prompt": "Ngôn từ dí dỏm, biểu cảm phong phú, vui nhộn, phù hợp video giải trí, tiểu phẩm hài, review phim hài."
+    }
+]
 
 # Supported TTS Backends
 TTS_BACKENDS = ["edge_tts", "vieneu", "openai_compatible", "offline_engine"]
@@ -89,7 +118,7 @@ EDGE_TTS_VOICES_BY_LANG = {
 EDGE_TTS_VIETNAMESE_VOICES = EDGE_TTS_VOICES_BY_LANG["vi"]
 
 # VieNeu Vietnamese Voices (25 Preset Voices chính thức từ VieNeu SDK v3 Turbo)
-VIENEU_VIETNAMESE_VOICES = [
+VIENEU_TURBO_VOICES = [
     # --- ⭐ Editors' Picks (Khuyến nghị hàng đầu) ---
     {"id": "Hải Đăng", "name": "⭐ Hải Đăng (Minh Quân Pro) — Nam · Bắc · Tự nhiên (Mặc định)", "gender": "Male", "region": "Miền Bắc"},
     {"id": "Mai Anh", "name": "⭐ Mai Anh — Nữ · Bắc · Tin tức / Thuyết minh", "gender": "Female", "region": "Miền Bắc"},
@@ -121,6 +150,25 @@ VIENEU_VIETNAMESE_VOICES = [
     {"id": "Đức Trí", "name": "Đức Trí — Nam · Nam · Đọc truyện", "gender": "Male", "region": "Miền Nam"},
     {"id": "Kim Thanh", "name": "Kim Thanh — Nữ · Nam · Đọc truyện", "gender": "Female", "region": "Miền Nam"}
 ]
+
+# VieNeu Vietnamese Voices (12 Preset Voices chính thức từ VieNeu SDK v3 Nano)
+VIENEU_NANO_VOICES = [
+    {"id": "Minh Quân", "name": "⭐ Minh Quân — Nam · Bắc · Tự nhiên (Mặc định)", "gender": "Male", "region": "Miền Bắc"},
+    {"id": "Mai Anh", "name": "⭐ Mai Anh — Nữ · Bắc · Tin tức / Thuyết minh", "gender": "Female", "region": "Miền Bắc"},
+    {"id": "Trúc Ly", "name": "⭐ Trúc Ly — Nữ · Bắc · Truyền cảm tự nhiên", "gender": "Female", "region": "Miền Bắc"},
+    {"id": "Anh Khôi", "name": "⭐ Anh Khôi — Nam · Bắc · Kể chuyện / Phim", "gender": "Male", "region": "Miền Bắc"},
+    {"id": "Ái Hân", "name": "Ái Hân — Nữ · Bắc · Dịu dàng trong trẻo", "gender": "Female", "region": "Miền Bắc"},
+    {"id": "Hữu Quân", "name": "Hữu Quân — Nam · Bắc · Trầm ấm kể chuyện", "gender": "Male", "region": "Miền Bắc"},
+    {"id": "Mạnh Dũng", "name": "Mạnh Dũng — Nam · Bắc · Chững chạc", "gender": "Male", "region": "Miền Bắc"},
+    {"id": "xoai_ngan", "name": "xoai_ngan — Nữ · Bắc · Trẻ trung đời thường", "gender": "Female", "region": "Miền Bắc"},
+    {"id": "Adam", "name": "Adam — Nam · Nam · Tự nhiên", "gender": "Male", "region": "Miền Nam"},
+    {"id": "Xuân Tiên", "name": "Xuân Tiên — Nữ · Nam · Tự nhiên", "gender": "Female", "region": "Miền Nam"},
+    {"id": "Mỹ Duyên", "name": "Mỹ Duyên — Nữ · Nam · Đọc truyện", "gender": "Female", "region": "Miền Nam"},
+    {"id": "Đức Trí", "name": "Đức Trí — Nam · Nam · Đọc truyện", "gender": "Male", "region": "Miền Nam"},
+]
+
+# Legacy alias for backward compatibility
+VIENEU_VIETNAMESE_VOICES = VIENEU_TURBO_VOICES
 
 # Timeline Modes
 class TimelineMode:

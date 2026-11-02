@@ -19,20 +19,23 @@ class MediaPlayerWidget(QWidget):
 
     position_changed = Signal(float)  # current time in seconds
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, video_enabled: bool = True):
         super().__init__(parent)
         self.media_path: Optional[str] = None
         self.duration_seconds = 0.0
+        self.video_enabled = video_enabled
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Video viewport
-        self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(240)
-        self.video_widget.setStyleSheet("background-color: #0f1017; border-radius: 8px;")
-        layout.addWidget(self.video_widget, stretch=1)
+        # Video viewport (only created for video players)
+        self.video_widget = None
+        if self.video_enabled:
+            self.video_widget = QVideoWidget()
+            self.video_widget.setMinimumHeight(240)
+            self.video_widget.setStyleSheet("background-color: #0f1017; border-radius: 8px;")
+            layout.addWidget(self.video_widget, stretch=1)
 
         # Controls container
         controls = QHBoxLayout()
@@ -58,7 +61,8 @@ class MediaPlayerWidget(QWidget):
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
-        self.player.setVideoOutput(self.video_widget)
+        if self.video_widget:
+            self.player.setVideoOutput(self.video_widget)
 
         self.player.positionChanged.connect(self._on_position_changed)
         self.player.durationChanged.connect(self._on_duration_changed)

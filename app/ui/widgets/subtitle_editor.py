@@ -81,53 +81,59 @@ class SubtitleEditorWidget(QWidget):
         self._updating = False
 
     def load_dialogues(self, dialogues: List[DialogueSegment]):
-        """Populate table with dialogue segments."""
+        """Populate table with dialogue segments safely and efficiently."""
         self._updating = True
-        self.dialogues = dialogues
-        self.table.setRowCount(len(dialogues))
+        self.dialogues = dialogues or []
 
-        for row, dlg in enumerate(dialogues):
-            # ID (read-only)
-            item_id = QTableWidgetItem(dlg.id)
-            item_id.setFlags(item_id.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(row, self.COL_ID, item_id)
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
+        try:
+            self.table.setRowCount(len(self.dialogues))
 
-            # Start time (editable)
-            item_start = QTableWidgetItem(seconds_to_srt_time(dlg.start))
-            self.table.setItem(row, self.COL_START, item_start)
+            for row, dlg in enumerate(self.dialogues):
+                # ID (read-only)
+                item_id = QTableWidgetItem(dlg.id)
+                item_id.setFlags(item_id.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row, self.COL_ID, item_id)
 
-            # End time (editable)
-            item_end = QTableWidgetItem(seconds_to_srt_time(dlg.end))
-            self.table.setItem(row, self.COL_END, item_end)
+                # Start time (editable)
+                item_start = QTableWidgetItem(seconds_to_srt_time(dlg.start))
+                self.table.setItem(row, self.COL_START, item_start)
 
-            # Source text (editable)
-            item_source = QTableWidgetItem(dlg.source_text)
-            self.table.setItem(row, self.COL_SOURCE, item_source)
+                # End time (editable)
+                item_end = QTableWidgetItem(seconds_to_srt_time(dlg.end))
+                self.table.setItem(row, self.COL_END, item_end)
 
-            # Vietnamese text (editable)
-            item_target = QTableWidgetItem(dlg.target_text)
-            self.table.setItem(row, self.COL_TARGET, item_target)
+                # Source text (editable)
+                item_source = QTableWidgetItem(dlg.source_text)
+                self.table.setItem(row, self.COL_SOURCE, item_source)
 
-            # TTS Duration (read-only)
-            dur_str = f"{dlg.tts_duration:.2f}s" if dlg.tts_duration > 0 else "-"
-            item_dur = QTableWidgetItem(dur_str)
-            item_dur.setFlags(item_dur.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(row, self.COL_TTS_DUR, item_dur)
+                # Vietnamese text (editable)
+                item_target = QTableWidgetItem(dlg.target_text)
+                self.table.setItem(row, self.COL_TARGET, item_target)
 
-            # Status badge (read-only)
-            status_text = {
-                DialogueStatus.PENDING: "Chờ xử lý",
-                DialogueStatus.TRANSCRIBED: "Đã nhận diện",
-                DialogueStatus.TRANSLATED: "Đã dịch",
-                DialogueStatus.SYNTHESIZED: "Đã tạo TTS",
-                DialogueStatus.MODIFIED: "Đã chỉnh sửa",
-                DialogueStatus.ERROR: "Lỗi"
-            }.get(dlg.status, dlg.status)
-            item_status = QTableWidgetItem(status_text)
-            item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(row, self.COL_STATUS, item_status)
+                # TTS Duration (read-only)
+                dur_str = f"{dlg.tts_duration:.2f}s" if dlg.tts_duration > 0 else "-"
+                item_dur = QTableWidgetItem(dur_str)
+                item_dur.setFlags(item_dur.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row, self.COL_TTS_DUR, item_dur)
 
-        self._updating = False
+                # Status badge (read-only)
+                status_text = {
+                    DialogueStatus.PENDING: "Chờ xử lý",
+                    DialogueStatus.TRANSCRIBED: "Đã nhận diện",
+                    DialogueStatus.TRANSLATED: "Đã dịch",
+                    DialogueStatus.SYNTHESIZED: "Đã tạo TTS",
+                    DialogueStatus.MODIFIED: "Đã chỉnh sửa",
+                    DialogueStatus.ERROR: "Lỗi"
+                }.get(dlg.status, dlg.status)
+                item_status = QTableWidgetItem(status_text)
+                item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row, self.COL_STATUS, item_status)
+        finally:
+            self.table.blockSignals(False)
+            self.table.setUpdatesEnabled(True)
+            self._updating = False
 
     def get_dialogues(self) -> List[DialogueSegment]:
         return self.dialogues

@@ -24,6 +24,25 @@ from app.utils.paths import (
 logger = logging.getLogger("AIDubbingStudio.Config")
 
 
+def apply_hf_token(token: Optional[str] = None) -> None:
+    """Set Hugging Face Hub token in environment variables and huggingface_hub runtime."""
+    if token is None:
+        token = app_config.get("hf_token", "")
+    token = (token or "").strip()
+    if token:
+        os.environ["HF_TOKEN"] = token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+        try:
+            import huggingface_hub
+            huggingface_hub.login(token=token, add_to_git_credential=False)
+        except Exception as e:
+            logger.debug(f"huggingface_hub.login error: {e}")
+        logger.info("Applied Hugging Face Token to environment.")
+    else:
+        # If token is empty or removed, clear HF_TOKEN only if set by previous config
+        pass
+
+
 class AppConfig:
     """Manages application-wide settings and persistence."""
 
@@ -31,6 +50,9 @@ class AppConfig:
         # Media tools
         "ffmpeg_path": "",
         "ffprobe_path": "",
+
+        # Hugging Face Hub Token (for faster model downloads & higher rate limits)
+        "hf_token": "",
 
         # ASR (faster-whisper)
         "asr_model": "base",
@@ -103,6 +125,11 @@ class AppConfig:
                 logger.error(f"Failed to read configuration: {e}. Using defaults.")
         else:
             self.save()
+
+        # Apply HF_TOKEN if available
+        hf_tok = self.data.get("hf_token", "")
+        if hf_tok:
+            apply_hf_token(hf_tok)
 
     def save(self):
         """Save configuration to disk."""

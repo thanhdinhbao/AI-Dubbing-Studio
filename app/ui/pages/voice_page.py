@@ -107,12 +107,7 @@ class VoicePage(QWidget):
 
         param_layout.addWidget(QLabel("Số luồng song song:"), 4, 0)
         self.combo_threads = QComboBox()
-        self.combo_threads.addItem("1 luồng (Tuần tự)", 1)
-        self.combo_threads.addItem("3 luồng", 3)
-        self.combo_threads.addItem("5 luồng song song (Khuyến nghị)", 5)
-        self.combo_threads.addItem("8 luồng song song (Tốc độ cao)", 8)
-        self.combo_threads.addItem("10 luồng song song", 10)
-        self.combo_threads.setCurrentIndex(2)  # default 5
+        self._update_thread_combo_for_backend("edge_tts")
         param_layout.addWidget(self.combo_threads, 4, 1)
 
         left_col.addWidget(param_group)
@@ -137,7 +132,7 @@ class VoicePage(QWidget):
         right_col = QVBoxLayout()
         sample_group = QGroupBox("Nghe thử Giọng đọc TTS")
         sample_layout = QVBoxLayout(sample_group)
-        self.sample_player = MediaPlayerWidget()
+        self.sample_player = MediaPlayerWidget(video_enabled=False)
         sample_layout.addWidget(self.sample_player)
         right_col.addWidget(sample_group)
 
@@ -167,8 +162,35 @@ class VoicePage(QWidget):
         self._populate_voices(backend, target_lang=target_lang)
         self.target_language_changed.emit(target_lang)
 
+    def _update_thread_combo_for_backend(self, backend: str):
+        current_val = self.combo_threads.currentData() if hasattr(self, "combo_threads") else None
+        self.combo_threads.blockSignals(True)
+        self.combo_threads.clear()
+        if backend in ("vieneu", "vieneu_nano", "offline_engine"):
+            self.combo_threads.addItem("1 luồng (Tiết kiệm CPU)", 1)
+            self.combo_threads.addItem("2 luồng song song (Khuyến nghị - Nhanh gấp đôi)", 2)
+            self.combo_threads.addItem("3 luồng song song (Tốc độ cao nhất)", 3)
+            target_val = current_val if current_val in (1, 2, 3) else 2
+            idx = self.combo_threads.findData(target_val)
+            self.combo_threads.setCurrentIndex(idx if idx >= 0 else 1)
+            self.combo_threads.setToolTip(
+                "Chạy song song 2-3 mô hình AI độc lập trên đa nhân CPU để tăng tốc độ lồng tiếng gấp 2-3 lần."
+            )
+        else:
+            self.combo_threads.addItem("1 luồng (Tuần tự)", 1)
+            self.combo_threads.addItem("3 luồng", 3)
+            self.combo_threads.addItem("5 luồng song song (Khuyến nghị)", 5)
+            self.combo_threads.addItem("8 luồng song song (Tốc độ cao)", 8)
+            self.combo_threads.addItem("10 luồng song song", 10)
+            target_val = current_val if current_val in (1, 3, 5, 8, 10) else 5
+            idx = self.combo_threads.findData(target_val)
+            self.combo_threads.setCurrentIndex(idx if idx >= 0 else 2)
+            self.combo_threads.setToolTip("Số luồng mạng tải song song các câu thoại từ Cloud API")
+        self.combo_threads.blockSignals(False)
+
     def _on_backend_changed(self):
         backend = self.combo_backend.currentData()
+        self._update_thread_combo_for_backend(backend)
         self._populate_voices(backend, target_lang=self.target_language)
 
     def _populate_voices(self, backend: str, select_voice: Optional[str] = None, target_lang: Optional[str] = None):
@@ -181,9 +203,9 @@ class VoicePage(QWidget):
             for v in voices:
                 self.combo_voice.addItem(f"{v['name']}", v["id"])
         elif backend in ("vieneu", "vieneu_nano"):
-            from app.providers.vieneu_tts_provider import VieNeuTTSProvider
-            provider = VieNeuTTSProvider()
-            for v in provider.get_voices():
+            from app.providers.vieneu_tts_provider import get_vieneu_voices_list
+            mode = "v3nano" if backend == "vieneu_nano" else "v3turbo"
+            for v in get_vieneu_voices_list(mode):
                 self.combo_voice.addItem(f"{v['name']}", v["id"])
         elif backend == "openai_compatible":
             voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]

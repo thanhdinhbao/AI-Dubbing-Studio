@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QSplitter, QMessageBox, QFileDialog
 )
 
-from app.constants import APP_NAME, APP_VERSION, TimelineMode
+from app.constants import APP_NAME, APP_VERSION, TimelineMode, AudioSeparationMode
 from app.config import app_config
 from app.models import ProjectData, MediaInfo
 from app.project_manager import ProjectManager
@@ -249,6 +249,9 @@ class MainWindow(QMainWindow):
         self.page_stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+        # Refresh export page info when switching to Export tab
+        if index == 5 and self.project_manager.current_project:
+            self.page_export.set_project(self.project_manager.current_project)
 
     def _toggle_log_drawer(self):
         vis = self.btn_toggle_log.isChecked()
@@ -386,18 +389,39 @@ class MainWindow(QMainWindow):
             proj.dialogues = dialogues
             self.page_transcription.set_project(proj)
             self.project_manager.save_project(proj)
-            QMessageBox.information(self, "Thành công", f"Nhận diện hoàn tất: tìm thấy {len(dialogues)} câu thoại.")
+            QTimer.singleShot(
+                100,
+                self,
+                lambda: QMessageBox.information(self, "Thành công", f"Nhận diện hoàn tất: tìm thấy {len(dialogues)} câu thoại.")
+            )
 
         worker.finished.connect(lambda dlgs: self._run_on_ui_thread(on_asr_done, dlgs))
         self.task_manager.start_worker(worker, "Nhận diện Giọng nói ASR")
 
     # --- Step 3: Translation ---
     def _create_translation_provider(self, backend: str = "google_free", options: Optional[dict] = None):
-        """Factory for translation providers (Google Free, OpenAI Cloud API, or Local LLM)."""
+        """Factory for translation providers (Google Free, Gemini Web API, OpenAI Cloud API, or Local LLM)."""
         options = options or {}
         if backend == "google_free":
             from app.providers.translation_api import GoogleFreeTranslationProvider
             return GoogleFreeTranslationProvider()
+        elif backend == "gemini_webapi":
+            from app.providers.translation_api import GeminiWebAPITranslationProvider
+            from app.utils.cookie_utils import extract_gemini_cookies
+            raw_cookie = options.get("cookie") or app_config.get("gemini_cookie", "")
+            psid, psidts = extract_gemini_cookies(raw_cookie)
+            if not psid:
+                psid = options.get("secure_1psid") or app_config.get("gemini_secure_1psid", "")
+            if not psidts:
+                psidts = options.get("secure_1psidts") or app_config.get("gemini_secure_1psidts", "")
+            proxy = options.get("proxy") or app_config.get("gemini_proxy", "")
+            style = options.get("trans_style") or app_config.get("gemini_trans_style", "storytelling")
+            return GeminiWebAPITranslationProvider(
+                secure_1psid=psid or None,
+                secure_1psidts=psidts or None,
+                proxy=proxy or None,
+                style=style
+            )
         elif backend == "local_llm":
             from app.providers.translation_api import LocalLLMTranslationProvider
             base_url = options.get("base_url") or app_config.get("ollama_base_url", "http://localhost:11434/v1")
@@ -456,10 +480,14 @@ class MainWindow(QMainWindow):
             self.page_transcription.set_project(proj)
             self.page_voice.set_target_language(target_lang)
             self.project_manager.save_project(proj)
-            QMessageBox.information(
+            QTimer.singleShot(
+                100,
                 self,
-                "Thành công",
-                f"Đã dịch toàn bộ {len(dialogues)} câu thoại sang {lang_name} ({backend}) thành công!"
+                lambda: QMessageBox.information(
+                    self,
+                    "Thành công",
+                    f"Đã dịch toàn bộ {len(dialogues)} câu thoại sang {lang_name} ({backend}) thành công!"
+                )
             )
 
         worker.finished.connect(lambda dlgs: self._run_on_ui_thread(on_trans_done, dlgs))
@@ -484,54 +512,45 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể khởi tạo bộ máy dịch thuật: {e}")
             return
 
-        # Safely cancel and clean up any previous single-translation thread
-        if self._single_trans_thread is not None:
+        # Safely cancel and clean up any previous single-translation worker
+        if self._single_trans_worker is not None:
             try:
-                if self._single_trans_thread.isRunning():
-                    if self._single_trans_worker:
-                        self._single_trans_worker.cancel()
-                    self._single_trans_thread.quit()
-                    self._single_trans_thread.wait(500)
-            except (RuntimeError, Exception):
+                if self._single_trans_worker.isRunning():
+                    self._single_trans_worker.cancel()
+                    self._single_trans_worker.quit()
+                    self._single_trans_worker.wait(500)
+            except Exception:
                 pass
-            self._single_trans_thread = None
             self._single_trans_worker = None
 
-        thread = QThread()
         worker = TranslationWorker(
             dialogues=[dlg],
             provider=provider,
             target_lang=target_lang
         )
-        self._single_trans_thread = thread
         self._single_trans_worker = worker
-
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-
         self.page_transcription.btn_translate_selected.setEnabled(False)
 
         def on_single_done(dlgs):
             if dlgs:
                 self.page_transcription.update_dialogue_target_at(row_index, dlgs[0].target_text)
                 self.project_manager.save_project(proj)
-            thread.quit()
 
         def on_single_err(err):
             QMessageBox.warning(self, "Lỗi Dịch Thuật", f"Không thể dịch câu đã chọn:\n{err}")
-            thread.quit()
 
-        def on_thread_finished():
+        def on_single_finished():
             self.page_transcription.btn_translate_selected.setEnabled(True)
-            if self._single_trans_thread is thread:
-                self._single_trans_thread = None
+            if self._single_trans_worker is worker:
                 self._single_trans_worker = None
 
         worker.finished.connect(lambda d: self._run_on_ui_thread(on_single_done, d))
         worker.error.connect(lambda e: self._run_on_ui_thread(on_single_err, e))
-        thread.finished.connect(on_thread_finished)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+        worker.finished.connect(on_single_finished)
+        worker.error.connect(lambda _: on_single_finished())
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        worker.start()
 
     # --- Step 4: TTS Generation ---
     def _on_tts_requested(self, backend: str, voice_id: str, options: dict):
@@ -571,10 +590,30 @@ class MainWindow(QMainWindow):
         def on_tts_done(dialogues):
             proj.dialogues = dialogues
             self.page_transcription.set_project(proj)
-            # Automatically rebuild timeline after TTS generation
-            self._rebuild_dynamic_timeline(TimelineMode.DYNAMIC_DURATION)
+            # Rebuild timeline directly & synchronously in 0.1ms without conflicting asynchronous worker threads
+            try:
+                from app.services.timeline_engine import TimelineEngine
+                from app.constants import VisualExtendMode
+                ext_mode = getattr(proj, "visual_extend_mode", None) or self.page_timeline.combo_extend_mode.currentData() or VisualExtendMode.HOLD_AND_PAD
+                proj.visual_extend_mode = ext_mode
+                engine = TimelineEngine(mode=proj.timeline_mode or TimelineMode.DYNAMIC_DURATION)
+                timeline = engine.build_timeline(
+                    source_duration=proj.media_info.duration if proj.media_info else 0.0,
+                    dialogues=proj.dialogues,
+                    options={"visual_extend_mode": ext_mode}
+                )
+                proj.timeline_segments = timeline
+                proj.output_duration = engine.calculate_output_duration(timeline)
+                self.page_timeline.set_project(proj)
+            except Exception as e:
+                logger.warning(f"Could not automatically rebuild timeline: {e}")
+
             self.project_manager.save_project(proj)
-            QMessageBox.information(self, "Thành công", "Đã tổng hợp toàn bộ giọng đọc tiếng Việt thành công!")
+            QTimer.singleShot(
+                100,
+                self,
+                lambda: QMessageBox.information(self, "Thành công", "Đã tổng hợp toàn bộ giọng đọc tiếng Việt thành công!")
+            )
 
         worker.finished.connect(lambda dlgs: self._run_on_ui_thread(on_tts_done, dlgs))
         self.task_manager.start_worker(worker, "Tổng hợp Giọng đọc TTS")
@@ -621,19 +660,16 @@ class MainWindow(QMainWindow):
         )
 
         # Safely cancel and clean up any previous test voice preview thread
-        if self._test_voice_thread is not None:
+        if self._test_voice_worker is not None:
             try:
-                if self._test_voice_thread.isRunning():
-                    if self._test_voice_worker:
-                        self._test_voice_worker.cancel()
-                    self._test_voice_thread.quit()
-                    self._test_voice_thread.wait(500)
-            except (RuntimeError, Exception):
+                if self._test_voice_worker.isRunning():
+                    self._test_voice_worker.cancel()
+                    self._test_voice_worker.quit()
+                    self._test_voice_worker.wait(500)
+            except Exception:
                 pass
-            self._test_voice_thread = None
             self._test_voice_worker = None
 
-        thread = QThread()
         worker = TTSWorker(
             dialogues=[dummy_dlg],
             provider=provider,
@@ -642,33 +678,28 @@ class MainWindow(QMainWindow):
             options=options,
             max_workers=1
         )
-        self._test_voice_thread = thread
         self._test_voice_worker = worker
-
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
 
         def on_test_done(dlgs):
             if dlgs and dlgs[0].tts_audio_path:
                 self.page_voice.sample_player.load_media(dlgs[0].tts_audio_path)
                 self.page_voice.sample_player.play()
-            thread.quit()
 
         def on_test_error(err):
             logger.warning(f"Test voice error: {err}")
             QMessageBox.warning(self, "Lỗi Thử Giọng", f"Không thể tạo mẫu giọng đọc:\n{err}")
-            thread.quit()
 
-        def on_thread_finished():
-            if self._test_voice_thread is thread:
-                self._test_voice_thread = None
+        def on_test_finished():
+            if self._test_voice_worker is worker:
                 self._test_voice_worker = None
 
         worker.finished.connect(lambda dlgs: self._run_on_ui_thread(on_test_done, dlgs))
         worker.error.connect(lambda err: self._run_on_ui_thread(on_test_error, err))
-        thread.finished.connect(on_thread_finished)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+        worker.finished.connect(on_test_finished)
+        worker.error.connect(lambda _: on_test_finished())
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        worker.start()
 
     # --- Step 5: Separation ---
     def _on_separation_requested(self, separation_mode: str):
@@ -687,11 +718,25 @@ class MainWindow(QMainWindow):
         )
 
         def on_sep_done(stems):
+            proj.separation_mode = separation_mode
             proj.vocal_stem_path = stems.get("vocal_stem")
             proj.instrumental_path = stems.get("instrumental_stem")
+            if "mixing" not in proj.custom_settings:
+                proj.custom_settings["mixing"] = {}
+            proj.custom_settings["mixing"].update(self.page_audio.get_mixing_settings())
             self.page_audio.set_project(proj)
+            self.page_export.set_project(proj)
             self.project_manager.save_project(proj)
-            QMessageBox.information(self, "Thành công", "Đã chuẩn bị track âm thanh nền thành công.")
+            msg = (
+                "Đã tắt hoàn toàn âm thanh gốc (Chỉ xuất lời thoại TTS)."
+                if separation_mode == AudioSeparationMode.MUTE_ORIGINAL
+                else "Đã chuẩn bị track âm thanh nền thành công."
+            )
+            QTimer.singleShot(
+                100,
+                self,
+                lambda: QMessageBox.information(self, "Thành công", msg)
+            )
 
         worker.finished.connect(lambda stems: self._run_on_ui_thread(on_sep_done, stems))
         self.task_manager.start_worker(worker, "Tách Âm thanh Nền")
@@ -731,8 +776,49 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Đang xử lý", "Một tác vụ khác đang được thực hiện. Vui lòng chờ hoàn tất.")
             return
 
-        # Background track: instrumental if available, otherwise extracted original audio
-        bg_track = proj.instrumental_path or proj.extracted_audio_path
+        # Check if project has visual_extend_mode and ensure timeline matches
+        from app.constants import VisualExtendMode
+        ext_mode = getattr(proj, "visual_extend_mode", None) or self.page_timeline.combo_extend_mode.currentData() or VisualExtendMode.HOLD_AND_PAD
+        proj.visual_extend_mode = ext_mode
+
+        # If user chose Hold & Pad or Speed Adjust, but the timeline contains old freeze_frame segments, rebuild it cleanly
+        has_freeze_in_timeline = any(s.segment_type == "video_freeze" for s in (proj.timeline_segments or []))
+        if has_freeze_in_timeline and ext_mode != VisualExtendMode.FREEZE_LAST_FRAME:
+            logger.info("Chế độ Hold & Pad / Speed Adjust được chọn nhưng timeline hiện tại có phân đoạn đóng băng. Đang tự động dựng lại timeline mượt mà...")
+            from app.services.timeline_engine import TimelineEngine
+            engine = TimelineEngine(mode=proj.timeline_mode or TimelineMode.DYNAMIC_DURATION)
+            proj.timeline_segments = engine.build_timeline(
+                source_duration=proj.media_info.duration if proj.media_info else 0.0,
+                dialogues=proj.dialogues,
+                options={"visual_extend_mode": ext_mode}
+            )
+            proj.output_duration = engine.calculate_output_duration(proj.timeline_segments)
+            self.page_timeline.set_project(proj)
+            self.project_manager.save_project(proj)
+
+        # Ensure latest mixing settings from UI and project are synchronized
+        mix_settings = self.page_audio.get_mixing_settings()
+        sep_mode = mix_settings.get("separation_mode") or getattr(proj, "separation_mode", AudioSeparationMode.DUCKING_ORIGINAL)
+        bg_vol = mix_settings.get("bg_music_volume", 0.0)
+
+        render_settings["separation_mode"] = sep_mode
+        render_settings["bg_music_volume"] = bg_vol
+        render_settings["tts_volume_gain"] = mix_settings.get("tts_volume_gain", 1.0)
+        render_settings["ducking_reduction"] = mix_settings.get("ducking_reduction", 0.2)
+        render_settings["enable_ducking"] = mix_settings.get("enable_ducking", True)
+
+        # Background track logic:
+        # If separation mode is MUTE_ORIGINAL or bg_music_volume is 0: DO NOT use any background audio!
+        if sep_mode == AudioSeparationMode.MUTE_ORIGINAL or bg_vol <= 0.001:
+            bg_track = None
+            render_settings["bg_music_volume"] = 0.0
+            logger.info("Chế độ MUTE_ORIGINAL hoặc Âm lượng nhạc nền = 0: Không đưa track âm thanh gốc vào video xuất.")
+        elif sep_mode == AudioSeparationMode.DEMUCS_SEPARATION and proj.instrumental_path and os.path.exists(proj.instrumental_path):
+            bg_track = proj.instrumental_path
+        elif proj.instrumental_path and os.path.exists(proj.instrumental_path):
+            bg_track = proj.instrumental_path
+        else:
+            bg_track = proj.extracted_audio_path
 
         worker = RenderWorker(
             source_video_path=proj.video_path,
@@ -746,14 +832,23 @@ class MainWindow(QMainWindow):
 
         def on_render_done(res):
             proj.output_video_path = res["output_video_path"]
-            self.page_export.show_render_result(res["output_video_path"])
             self.project_manager.save_project(proj)
-            QMessageBox.information(
+            # Give OS file handles and worker thread a brief tick to settle before loading preview
+            QTimer.singleShot(
+                100,
                 self,
-                "Hoàn tất Xuất bản!",
-                f"Video lồng tiếng đã được xuất thành công!\n"
-                f"Đường dẫn: {res['output_video_path']}\n"
-                f"Thời lượng: {res['validation'].get('duration', 0.0):.2f}s"
+                lambda: self.page_export.show_render_result(res["output_video_path"])
+            )
+            QTimer.singleShot(
+                200,
+                self,
+                lambda: QMessageBox.information(
+                    self,
+                    "Hoàn tất Xuất bản!",
+                    f"Video lồng tiếng đã được xuất thành công!\n"
+                    f"Đường dẫn: {res['output_video_path']}\n"
+                    f"Thời lượng: {res['validation'].get('duration', 0.0):.2f}s"
+                )
             )
 
         worker.finished.connect(lambda res: self._run_on_ui_thread(on_render_done, res))
@@ -764,11 +859,12 @@ class MainWindow(QMainWindow):
         if self.task_manager:
             self.task_manager.cancel_current_task()
 
-        for t_attr in ("_test_voice_thread", "_single_trans_thread"):
+        for t_attr in ("_test_voice_worker", "_single_trans_worker"):
             t = getattr(self, t_attr, None)
             if t is not None:
                 try:
                     if t.isRunning():
+                        t.cancel()
                         t.quit()
                         t.wait(500)
                 except Exception:

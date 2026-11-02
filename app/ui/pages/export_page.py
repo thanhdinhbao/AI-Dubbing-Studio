@@ -11,9 +11,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.models import ProjectData
+from app.constants import AudioSeparationMode
 from app.ui.widgets.media_player import MediaPlayerWidget
 from app.utils.paths import get_default_output_dir
 from app.utils.timecode import seconds_to_display
+from app.utils.ffmpeg_utils import is_encoder_supported
 
 logger = logging.getLogger("AIDubbingStudio.ExportPage")
 
@@ -62,9 +64,13 @@ class ExportPage(QWidget):
 
         codec_layout.addWidget(QLabel("Codec Video:"), 0, 0)
         self.combo_vcodec = QComboBox()
-        self.combo_vcodec.addItem("H.264 CPU Đa luồng (libx264 - Tương thích tối đa)", "libx264")
-        self.combo_vcodec.addItem("H.264 NVIDIA GPU NVENC (Tốc độ cao nhất)", "h264_nvenc")
+        self.combo_vcodec.addItem("H.264 CPU Đa luồng (libx264 - Tương thích tối đa & Ổn định)", "libx264")
+        if is_encoder_supported("h264_nvenc"):
+            self.combo_vcodec.addItem("H.264 NVIDIA GPU NVENC (Tốc độ cao nhất)", "h264_nvenc")
+        else:
+            self.combo_vcodec.addItem("H.264 NVIDIA GPU NVENC (Driver không hỗ trợ NVENC API mới)", "libx264")
         self.combo_vcodec.addItem("H.265 / HEVC (libx265)", "libx265")
+        self.combo_vcodec.setCurrentIndex(0)
         codec_layout.addWidget(self.combo_vcodec, 0, 1)
 
         codec_layout.addWidget(QLabel("Tốc độ mã hóa (Preset):"), 1, 0)
@@ -88,6 +94,11 @@ class ExportPage(QWidget):
         self.combo_acodec.addItem("AAC (192 kbps Stereo - Chuẩn)", "aac")
         self.combo_acodec.addItem("MP3 (Lame 192 kbps)", "libmp3lame")
         codec_layout.addWidget(self.combo_acodec, 3, 1)
+
+        codec_layout.addWidget(QLabel("Âm thanh nền (Gốc/Nhạc):"), 4, 0)
+        self.lbl_audio_mode_info = QLabel("Đang tải cấu hình...")
+        self.lbl_audio_mode_info.setStyleSheet("color: #7aa2f7; font-weight: bold;")
+        codec_layout.addWidget(self.lbl_audio_mode_info, 4, 1)
 
         left_col.addWidget(codec_group)
 
@@ -134,6 +145,24 @@ class ExportPage(QWidget):
             if project.video_path:
                 stem = Path(project.video_path).stem
                 self.filename_input.setText(f"{stem}_dubbed_vi.mp4")
+
+            # Update audio mix info
+            sep_mode = project.separation_mode or AudioSeparationMode.DUCKING_ORIGINAL
+            mix = project.custom_settings.get("mixing", {})
+            bg_vol = float(mix.get("bg_music_volume", 0.25))
+
+            if sep_mode == AudioSeparationMode.MUTE_ORIGINAL or bg_vol <= 0.001:
+                self.lbl_audio_mode_info.setText("🔇 ĐÃ TẮT HOÀN TOÀN ÂM GỐC (Chỉ xuất lời thoại TTS)")
+                self.lbl_audio_mode_info.setStyleSheet("color: #ff9e64; font-weight: bold;")
+            elif sep_mode == AudioSeparationMode.DEMUCS_SEPARATION:
+                self.lbl_audio_mode_info.setText(f"🎵 Nhạc nền tách Demucs (Âm lượng: {int(bg_vol * 100)}%)")
+                self.lbl_audio_mode_info.setStyleSheet("color: #9ece6a; font-weight: bold;")
+            elif sep_mode == AudioSeparationMode.KEEP_ORIGINAL_LOW:
+                self.lbl_audio_mode_info.setText(f"🎵 Giữ âm gốc mức thấp (Âm lượng: {int(bg_vol * 100)}%)")
+                self.lbl_audio_mode_info.setStyleSheet("color: #7aa2f7; font-weight: bold;")
+            else:
+                self.lbl_audio_mode_info.setText(f"🎵 Nhạc nền Ducking tự động (Âm lượng: {int(bg_vol * 100)}%)")
+                self.lbl_audio_mode_info.setStyleSheet("color: #7aa2f7; font-weight: bold;")
 
             if project.output_video_path and os.path.exists(project.output_video_path):
                 self.show_render_result(project.output_video_path)
@@ -187,15 +216,24 @@ class ExportPage(QWidget):
         filename = self.filename_input.text().strip() or "dubbed_video_vi.mp4"
         out_path = str(out_dir / filename)
 
+        # Read mixing settings from project
+        mix = (self.current_project.custom_settings.get("mixing", {}) if self.current_project else {})
+        sep_mode = getattr(self.current_project, "separation_mode", AudioSeparationMode.DUCKING_ORIGINAL) if self.current_project else AudioSeparationMode.DUCKING_ORIGINAL
+
+        bg_vol = 0.0 if sep_mode == AudioSeparationMode.MUTE_ORIGINAL else float(mix.get("bg_music_volume", 0.25))
+        tts_gain = float(mix.get("tts_volume_gain", 1.0))
+        ducking_reduction = float(mix.get("ducking_reduction", 0.2))
+
         settings = {
             "render_video_codec": self.combo_vcodec.currentData(),
             "render_audio_codec": self.combo_acodec.currentData(),
             "render_crf": self.combo_crf.currentData(),
             "render_preset": self.combo_preset.currentData() or "faster",
             "render_audio_bitrate": "192k",
-            "bg_music_volume": 0.25,
-            "tts_volume_gain": 1.1,
-            "ducking_reduction": 0.2
+            "separation_mode": sep_mode,
+            "bg_music_volume": bg_vol,
+            "tts_volume_gain": tts_gain,
+            "ducking_reduction": ducking_reduction
         }
 
         self.render_requested.emit(out_path, settings)

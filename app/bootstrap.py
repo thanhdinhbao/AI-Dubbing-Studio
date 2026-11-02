@@ -10,7 +10,7 @@ from app.logging_config import setup_logging
 from app.utils.paths import ensure_directories
 from app.utils.ffmpeg_utils import check_ffmpeg_available, set_custom_ffmpeg_paths
 from app.utils.audio_utils import patch_pyav_metadata_errors
-from app.config import app_config
+from app.config import app_config, apply_hf_token
 from app.ui.styles import DARK_THEME
 from app.ui.main_window import MainWindow
 
@@ -45,6 +45,7 @@ def bootstrap_app() -> tuple[QApplication, MainWindow]:
     ensure_directories()
     patch_pyav_metadata_errors()
     setup_cuda_dll_paths()
+    apply_hf_token()
 
     # 3. Apply custom configured FFmpeg paths if set
     set_custom_ffmpeg_paths(
@@ -61,6 +62,11 @@ def bootstrap_app() -> tuple[QApplication, MainWindow]:
     app = QApplication.instance()
     if not app:
         app = QApplication(sys.argv)
+
+    from PySide6.QtGui import QFont
+    default_font = QFont("Segoe UI", 10)
+    default_font.setStyleHint(QFont.SansSerif)
+    app.setFont(default_font)
 
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)

@@ -1,6 +1,7 @@
 {
   "ffmpeg_path": "",
   "ffprobe_path": "",
+  "hf_token": "hf_unit_test_token_abc",
   "asr_model": "base",
   "asr_device": "cpu",
   "asr_compute_type": "int8",
@@ -21,6 +22,8 @@
   "tts_api_base_url": "https://api.openai.com/v1",
   "tts_api_key": "",
   "tts_api_model": "tts-1",
+  "vieneu_api_url": "https://www.vieneu.io/api/tts/demo",
+  "vieneu_token": "",
   "offline_tts_model_path": "",
   "timeline_mode": "dynamic_duration",
   "audio_separation_mode": "ducking_original",
@@ -37,5 +40,9 @@
   "output_dir": "D:\\PROJECT-PYTHON\\T10-2026\\voice-dubbing\\output",
   "cache_dir": "D:\\PROJECT-PYTHON\\T10-2026\\voice-dubbing\\cache",
   "models_dir": "D:\\PROJECT-PYTHON\\T10-2026\\voice-dubbing\\models",
-  "worker_concurrency": 2
+  "worker_concurrency": 2,
+  "gemini_cookie": "SAPISID=g_gQzkha8K4k0fav/Aj3lds4G6S3q5PA1P;__Secure-3PAPISID=g_gQzkha8K4k0fav/Aj3lds4G6S3q5PA1P;_gcl_au=1.1.1619383072.1792743800.-.-.1793238697.359948280.1793238697.1793238697;AEC=Aaa9EJoWtgz_GNv06FrrPBS800LqH9XQE8ZCGV0908vCVUleKAJLOb5Ie18;_ga_WC57KJ50ZZ=GS2.1.s1793321084$o3$g1$t1793321093$j51$l0$h0;NID=Cp0DCAESzwIBM9Agl3mEdAU1IV0WAi808he5OtYGw77soCxRtuPmozZixFwZuq-YaaNEMa6q7pNe8oh09bZDMuA6nYmrcTWryjKLTMdhAfg2i2IfSS6C_GGbsfbwgkEustLWM7Poe6J_iupncIhZadQSAs3X1IL7CE97bIg7MFvweZn60Q50fwcDHwxNaQ3MMWjJtUmwMxEFRg2ewJdxUXDvWON1GCEvNFMrIrD2R4U-LulKYZYdh-W_Y-SfQFg-_YPcQnJPOisBRN37F9kWAJ9QQz7aBLfvgNCM5M5HDTHymyw5mzFxIeR9VBzgKdtBFhwQFIz-32LUQOa_Shy10SewG-_xt-FcRySrnYO1V9uQUWH0qwynI7q90xXIZf7PrHB6NPAAVs-S56wWqgEQX8L6ynfnHHPhzm4g02DUeuOWA_xfH0ZXrqDFFIwHeluPDAW2OYNgXCgBMkUBcEpCz86a_nJw04JQ0NvhjCFa6igp-9ETFERBro9XpAjtiZVBWGuKZupduRq4It_p0EtSYt7waoQKoHPuCHBbqBAjywQ;APISID=QrriUJWPtFAv5sy2/A-MEUI5c1H8qD_2be;__Secure-1PSIDTS=sidts-CjIBnJZzamweeuITLpN91v-cdMaC8Wy-EzErn2uMD1PM_nurTxy0J6IXAIV-7_E1uWt5tBAA;COMPASS=gwus-pd=CjYACWuJV6bdbSKCsd3u60qAkVAfygccGCCfpHkG4CElBKJ49ycMN55fMbrGk3w4rTFjTPKDAK8Q6e-P1wYaZgAJa4lXQ4eTXg932ycReyKsraJrnOhjKm_MGvDAsRK3YoRjEUIPl081Zc7aeB4V3BK5W6pcI6OwdzRFsx8hUjRjFYXkyTOqVFpekFxS5tRamyPlvhAocEnXOcembUqvahXYFsr8BiABKnAIARD074_XBhpmAAlriVda-PT_OARKlfunMIt_70NZIFMLRMzsuZMRE3S4LWesk71Y3ML4X5jw19KF-z-xASnct4XnGHUjBLeL9WJJsEWs1PfpIka2LX9nX_KDe0-6dfIMtIF22q665EovNxm2kNLZMAE;__Secure-1PAPISID=g_gQzkha8K4k0fav/Aj3lds4G6S3q5PA1P;__Secure-3PSID=g.a000EQmhnA9tkOzrXnYTxTjbV143hmEybrUrrVolzs3XgwquHQkpt3Vt1o9b7iKA00S_DiPklQACgYKAU0SARASFQHGX2MiogpySJzOM303zk5PDBqSBhoVAUF8yKqvmjt0tKGHbEEAj3ocBAXe0076;__Secure-1PSID=g.a000EQmhnA9tkOzrXnYTxTjbV143hmEybrUrrVolzs3XgwquHQkpPXUBmDxmkPewudPtlF3nmQACgYKAa8SARASFQHGX2Mi-U2nlDs_5s2nUkSWe5asqBoVAUF8yKoaJdH2a7syd0-jm6bZi9Bb0076;__Secure-1PSIDCC=APD_SKG7JUDM6XNgiLy605VxSaAelNQdhql3dIHKWXDBoW2rF3agMgr6JERHYoOe6utiWTMm3Ys;__Secure-3PSIDCC=APD_SKGKrt-XK4wgFR1VlTFFem6_lrkdDIxUckWnepgQ-4DdCLqZWYg2UaC6Wm9EFpX5k3Q9iw;__Secure-3PSIDTS=sidts-CjIBnJZzamweeuITLpN91v-cdMaC8Wy-EzErn2uMD1PM_nurTxy0J6IXAIV-7_E1uWt5tBAA;__Secure-STRP=ABNhA6hkeOLvlRX5rNOcxczIaaSTNTgNTikYjcnRJt2DQGERMVOST4ZU3MnspExtwyXP9mixMd0Edzvwr8vhsGzVsMJSJmwIAA;_ga=GA1.1.845255874.1792743800;_ga_BF8Q35BMLM=GS2.1.s1793321085$o2$g1$t1793321093$j52$l0$h0;HSID=Ar2hdyKgaiPzzAaQf;SEARCH_SAMESITE=CgQIgaIB;SID=g.a000EQmhnA9tkOzrXnYTxTjbV143hmEybrUrrVolzs3XgwquHQkphkBtCEJgF36ZQqXrQUbiHAACgYKAaMSARASFQHGX2MiHTjVlaP6UQUy83h43a-9UBoVAUF8yKqMEMtFGOWZAhBQENltzTfK0076;SIDCC=APD_SKHv2Rr9HeukK0MouCKzGqC31EaReohIMooZmBjiKAr5C7TXFXV4DUhuvnRt2ErmkscRcw;SSID=AzXQ_MHDmL7bqWjos",
+  "gemini_secure_1psid": "g.a000EQmhnA9tkOzrXnYTxTjbV143hmEybrUrrVolzs3XgwquHQkpPXUBmDxmkPewudPtlF3nmQACgYKAa8SARASFQHGX2Mi-U2nlDs_5s2nUkSWe5asqBoVAUF8yKoaJdH2a7syd0-jm6bZi9Bb0076",
+  "gemini_secure_1psidts": "sidts-CjIBnJZzamweeuITLpN91v-cdMaC8Wy-EzErn2uMD1PM_nurTxy0J6IXAIV-7_E1uWt5tBAA",
+  "gemini_proxy": ""
 }

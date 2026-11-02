@@ -22,6 +22,10 @@ class BaseTranslationProvider(ABC):
         """Test API connectivity or model availability."""
         raise NotImplementedError
 
+    def close(self):
+        """Release any network or model resources held by provider."""
+        pass
+
 
 class BaseTTSProvider(ABC):
     """Abstract Base Class for Text-to-Speech Providers."""

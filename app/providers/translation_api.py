@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import asyncio
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -247,5 +248,264 @@ class LocalLLMTranslationProvider(OpenAITranslationProvider):
                 f"Vui lòng đảm bảo Ollama hoặc LM Studio đã được bật trên máy của bạn.\nChi tiết: {msg}"
             )
         return True, f"Kết nối LLM cục bộ ({self.model}) thành công!"
+
+
+class GeminiWebAPITranslationProvider(BaseTranslationProvider):
+    """Translation provider using Gemini Web API with browser cookies, system prompt priming, and translation styles."""
+
+    def __init__(
+        self,
+        secure_1psid: Optional[str] = None,
+        secure_1psidts: Optional[str] = None,
+        proxy: Optional[str] = None,
+        style: str = "storytelling",
+        timeout: int = 45
+    ):
+        self.secure_1psid = secure_1psid
+        self.secure_1psidts = secure_1psidts
+        self.proxy = proxy
+        self.style = style
+        self.timeout = timeout
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client = None
+        self._chat = None
+        self._session_metadata = None
+        self._current_target_lang = None
+        self._current_style = None
+
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is None or self._loop.is_closed():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
+
+    def _run_async(self, coro):
+        loop = self._get_loop()
+        return loop.run_until_complete(coro)
+
+    async def _close_session(self):
+        """Close active Gemini client session and reset states."""
+        if self._client:
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            self._client = None
+        self._chat = None
+        self._session_metadata = None
+        self._current_target_lang = None
+        self._current_style = None
+
+    def close(self):
+        """Clean up client and event loop."""
+        if self._loop and not self._loop.is_closed():
+            try:
+                self._run_async(self._close_session())
+            except Exception:
+                pass
+            try:
+                pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                self._loop.close()
+            except Exception:
+                pass
+            self._loop = None
+
+    def test_connection(self) -> Tuple[bool, str]:
+        """Test authentication and connectivity with Gemini Web API."""
+        try:
+            from gemini_webapi import GeminiClient
+
+            async def _do_test():
+                c = GeminiClient(
+                    secure_1psid=self.secure_1psid or None,
+                    secure_1psidts=self.secure_1psidts or None,
+                    proxy=self.proxy or None
+                )
+                try:
+                    await c.init(
+                        timeout=min(self.timeout, 30),
+                        auto_close=False,
+                        close_delay=300,
+                        auto_refresh=False
+                    )
+                    chat = c.start_chat()
+                    res = await chat.send_message("Xin chào, hãy phản hồi ngắn gọn 1 câu.")
+                    return res.text if res else ""
+                finally:
+                    try:
+                        await c.close()
+                    except Exception:
+                        pass
+
+            reply = self._run_async(_do_test())
+            if reply:
+                snippet = reply.strip()[:100].replace("\n", " ")
+                return True, f"Kết nối Gemini Web API thành công!\nGemini phản hồi: '{snippet}'"
+            return False, "Không nhận được phản hồi từ Gemini Web API."
+        except Exception as e:
+            return False, f"Lỗi kết nối Gemini Web API: {e}"
+
+    async def _ensure_chat_session(self, target_lang: str, style_id: str):
+        """Initialize Gemini client and prime chat session with system prompt if needed."""
+        from gemini_webapi import GeminiClient
+        from app.constants import TRANSLATION_STYLES
+
+        if (
+            self._chat is not None
+            and self._current_target_lang == target_lang
+            and self._current_style == style_id
+        ):
+            return self._chat
+
+        if self._client is None:
+            self._client = GeminiClient(
+                secure_1psid=self.secure_1psid or None,
+                secure_1psidts=self.secure_1psidts or None,
+                proxy=self.proxy or None
+            )
+            await self._client.init(
+                timeout=self.timeout,
+                auto_close=False,
+                close_delay=300,
+                auto_refresh=False
+            )
+
+        # Start a new chat session or load from metadata
+        chat = self._client.start_chat()
+
+        # Prime AI with system prompt for translation
+        target_lang_name = get_target_lang_prompt_name(target_lang)
+        style_item = next((s for s in TRANSLATION_STYLES if s["id"] == style_id), None)
+        style_name = style_item["name"] if style_item else style_id
+        style_desc = style_item["prompt"] if style_item else "Tự nhiên, phù hợp lồng tiếng."
+
+        system_prompt = (
+            f"Bạn là chuyên gia biên dịch kịch bản lồng tiếng video chuyên nghiệp sang {target_lang_name}.\n"
+            f"Phong cách dịch bắt buộc: {style_name} ({style_desc}).\n\n"
+            "QUY TẮC BẮT BUỘC:\n"
+            "1. Dịch truyền cảm, tự nhiên theo đúng phong cách yêu cầu, giữ nguyên ngữ cảnh và cảm xúc của lời thoại.\n"
+            "2. Giữ độ dài câu dịch vừa vặn với nhịp điệu phát âm để thuận tiện cho việc lồng tiếng TTS.\n"
+            "3. Định dạng đầu ra nghiêm ngặt: Mỗi câu được đánh số [1], [2], [3]... Bạn CHỈ trả về đúng danh sách các câu đã dịch:\n"
+            "[1] Bản dịch câu 1\n"
+            "[2] Bản dịch câu 2\n"
+            "4. TUYỆT ĐỐI KHÔNG kèm theo lời chào, giải thích, chú thích hay bất kỳ từ ngữ nào khác ngoài danh sách [số]."
+        )
+
+        try:
+            await chat.send_message(system_prompt)
+            self._session_metadata = chat.metadata
+        except Exception as e:
+            logger.warning(f"Error sending system prompt to Gemini chat: {e}")
+
+        self._chat = chat
+        self._current_target_lang = target_lang
+        self._current_style = style_id
+        return self._chat
+
+    def _translate_single(self, text: str, source_lang: str = "auto", target_lang: str = "vi", style_id: Optional[str] = None) -> str:
+        text_clean = text.strip()
+        if not text_clean:
+            return text
+
+        style_id = style_id or self.style or "storytelling"
+        target_lang_name = get_target_lang_prompt_name(target_lang)
+
+        async def _do():
+            chat = await self._ensure_chat_session(target_lang, style_id)
+            prompt = f"Dịch câu thoại sau sang {target_lang_name}:\n[1] {text_clean}"
+            res = await chat.send_message(prompt)
+            self._session_metadata = chat.metadata
+            ans = res.text.strip()
+            m = re.search(r"^\[1\]\s*(.*)", ans, re.MULTILINE)
+            if m:
+                return m.group(1).strip()
+            return ans.strip("[]\"' \n")
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self._run_async(_do())
+            except Exception as e:
+                logger.warning(f"Gemini single translation error on attempt {attempt}/{max_retries}: {e}")
+                self._run_async(self._close_session())
+                if attempt == max_retries:
+                    raise TranslationError(f"Lỗi dịch câu với Gemini Web API: {e}")
+                import time
+                time.sleep(1.5 * attempt)
+
+    def translate_batch(
+        self,
+        texts: List[str],
+        source_lang: str = "auto",
+        target_lang: str = "vi",
+        context: Optional[str] = None
+    ) -> List[str]:
+        if not texts:
+            return []
+
+        style_id = self.style or "storytelling"
+        target_lang_name = get_target_lang_prompt_name(target_lang)
+
+        async def _do_batch():
+            chat = await self._ensure_chat_session(target_lang, style_id)
+            prompt_lines = [f"[{i + 1}] {t.strip()}" for i, t in enumerate(texts)]
+            user_prompt = (
+                f"Hãy dịch các câu thoại sau sang {target_lang_name}:\n"
+                + "\n".join(prompt_lines)
+            )
+            res = await chat.send_message(user_prompt)
+            self._session_metadata = chat.metadata
+            content = res.text.strip()
+
+            # Parse numbered answers [1], [2]...
+            results_map = {}
+            for line in content.split("\n"):
+                m = re.match(r"^\[(\d+)\]\s*(.*)", line.strip())
+                if m:
+                    idx = int(m.group(1)) - 1
+                    results_map[idx] = m.group(2).strip()
+
+            if len(results_map) == len(texts):
+                return [results_map[i] for i in range(len(texts))]
+
+            # Fallback parsing line by line
+            lines = [l.strip() for l in content.split("\n") if l.strip()]
+            cleaned_lines = []
+            for l in lines:
+                l_clean = re.sub(r"^\d+[\.\)\]]\s*", "", l).strip("\"'[] ")
+                if l_clean:
+                    cleaned_lines.append(l_clean)
+
+            if len(cleaned_lines) == len(texts):
+                return cleaned_lines
+
+            # Best effort mapping
+            final_res = []
+            for i in range(len(texts)):
+                if i in results_map:
+                    final_res.append(results_map[i])
+                elif i < len(cleaned_lines):
+                    final_res.append(cleaned_lines[i])
+                else:
+                    final_res.append(texts[i])
+            return final_res
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self._run_async(_do_batch())
+            except Exception as e:
+                err_str = str(e)
+                logger.warning(f"Gemini batch translation error on attempt {attempt}/{max_retries}: {err_str}")
+                # Reset connection and session on network / SSL drop
+                self._run_async(self._close_session())
+                if attempt == max_retries:
+                    raise TranslationError(f"Dịch thuật thất bại với Gemini Web API sau {max_retries} lần thử: {err_str}")
+                import time
+                time.sleep(2.0 * attempt)
 
 

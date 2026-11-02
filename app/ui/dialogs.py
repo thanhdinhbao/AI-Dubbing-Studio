@@ -7,14 +7,15 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QLabel, QLineEdit, QPushButton, QComboBox,
     QGridLayout, QFileDialog, QMessageBox, QGroupBox,
-    QCheckBox, QListWidget, QListWidgetItem, QProgressBar
+    QCheckBox, QListWidget, QListWidgetItem, QProgressBar,
+    QTextEdit
 )
 from PySide6.QtMultimedia import (
     QMediaCaptureSession, QAudioInput, QMediaRecorder,
     QMediaFormat, QMediaDevices, QMediaPlayer, QAudioOutput
 )
 
-from app.config import app_config
+from app.config import app_config, apply_hf_token
 from app.constants import APP_NAME, APP_VERSION
 from app.utils.ffmpeg_utils import check_ffmpeg_available, set_custom_ffmpeg_paths
 from app.utils.paths import get_default_logs_dir, get_default_cache_dir
@@ -28,44 +29,143 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None, active_tab: int = 0):
         super().__init__(parent)
         self.setWindowTitle(f"Cài Đặt — {APP_NAME}")
-        self.resize(650, 480)
+        self.resize(680, 540)
 
         main_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
 
-        # Tab 1: FFmpeg & System
+        # Tab 1: FFmpeg, System & Hugging Face Hub
         tab_sys = QWidget()
-        sys_layout = QGridLayout(tab_sys)
+        tab_sys_layout = QVBoxLayout(tab_sys)
+        tab_sys_layout.setSpacing(12)
 
-        sys_layout.addWidget(QLabel("Đường dẫn FFmpeg:"), 0, 0)
+        # 1. FFmpeg & Media Tools Group
+        grp_ffmpeg = QGroupBox("Công cụ Media (FFmpeg & FFprobe)")
+        ffmpeg_layout = QGridLayout(grp_ffmpeg)
+        ffmpeg_layout.setSpacing(8)
+
+        ffmpeg_layout.addWidget(QLabel("Đường dẫn FFmpeg:"), 0, 0)
         self.input_ffmpeg = QLineEdit(app_config.get("ffmpeg_path", ""))
-        sys_layout.addWidget(self.input_ffmpeg, 0, 1)
+        ffmpeg_layout.addWidget(self.input_ffmpeg, 0, 1)
         btn_ff_browse = QPushButton("Duyệt...")
         btn_ff_browse.clicked.connect(lambda: self._browse_file(self.input_ffmpeg, "ffmpeg.exe"))
-        sys_layout.addWidget(btn_ff_browse, 0, 2)
+        ffmpeg_layout.addWidget(btn_ff_browse, 0, 2)
 
-        sys_layout.addWidget(QLabel("Đường dẫn FFprobe:"), 1, 0)
+        ffmpeg_layout.addWidget(QLabel("Đường dẫn FFprobe:"), 1, 0)
         self.input_ffprobe = QLineEdit(app_config.get("ffprobe_path", ""))
-        sys_layout.addWidget(self.input_ffprobe, 1, 1)
+        ffmpeg_layout.addWidget(self.input_ffprobe, 1, 1)
         btn_probe_browse = QPushButton("Duyệt...")
         btn_probe_browse.clicked.connect(lambda: self._browse_file(self.input_ffprobe, "ffprobe.exe"))
-        sys_layout.addWidget(btn_probe_browse, 1, 2)
+        ffmpeg_layout.addWidget(btn_probe_browse, 1, 2)
 
+        ff_btn_row = QHBoxLayout()
         btn_test_ff = QPushButton("🔍 Kiểm tra FFmpeg & FFprobe")
         btn_test_ff.clicked.connect(self._test_ffmpeg)
-        sys_layout.addWidget(btn_test_ff, 2, 0, 1, 3)
+        ff_btn_row.addWidget(btn_test_ff)
 
         btn_open_logs = QPushButton("📁 Mở thư mục Logs")
         btn_open_logs.clicked.connect(lambda: os.startfile(get_default_logs_dir()))
-        sys_layout.addWidget(btn_open_logs, 3, 0)
+        ff_btn_row.addWidget(btn_open_logs)
 
         btn_clear_cache = QPushButton("🗑 Dọn dẹp Cache tạm")
         btn_clear_cache.clicked.connect(self._clear_cache)
-        sys_layout.addWidget(btn_clear_cache, 3, 1)
+        ff_btn_row.addWidget(btn_clear_cache)
 
-        self.tabs.addTab(tab_sys, "Hệ Thống & FFmpeg")
+        ffmpeg_layout.addLayout(ff_btn_row, 2, 0, 1, 3)
+        tab_sys_layout.addWidget(grp_ffmpeg)
 
-        # Tab 2: Translation API & Local Models
+        # 2. Hugging Face Hub Group
+        grp_hf = QGroupBox("🤗 Hugging Face Hub (Tải mô hình AI: Whisper, VieNeu, Demucs...)")
+        hf_layout = QGridLayout(grp_hf)
+        hf_layout.setSpacing(8)
+
+        hf_layout.addWidget(QLabel("HF Token:"), 0, 0)
+        hf_input_box = QHBoxLayout()
+        self.input_hf_token = QLineEdit(app_config.get("hf_token", ""))
+        self.input_hf_token.setEchoMode(QLineEdit.Password)
+        self.input_hf_token.setPlaceholderText("Dán mã HF_TOKEN tại đây (ví dụ: hf_xxxxxxxxxxxxxxxxxxxxxxxx)...")
+        hf_input_box.addWidget(self.input_hf_token)
+
+        self.btn_toggle_hf = QPushButton("👁")
+        self.btn_toggle_hf.setFixedWidth(36)
+        self.btn_toggle_hf.setToolTip("Hiện / Ẩn token")
+        self.btn_toggle_hf.clicked.connect(self._toggle_hf_visibility)
+        hf_input_box.addWidget(self.btn_toggle_hf)
+
+        self.btn_test_hf = QPushButton("🔍 Kiểm tra Token")
+        self.btn_test_hf.clicked.connect(self._test_hf_token)
+        hf_input_box.addWidget(self.btn_test_hf)
+
+        hf_layout.addLayout(hf_input_box, 0, 1)
+
+        self.lbl_hf_status = QLabel("Trạng thái: Nhập HF_TOKEN để tăng tốc độ tải mô hình và bỏ qua giới hạn yêu cầu (rate limit).")
+        self.lbl_hf_status.setStyleSheet("color: #a9b1d6; font-style: italic;")
+        hf_layout.addWidget(self.lbl_hf_status, 1, 0, 1, 2)
+
+        lbl_hf_guide = QLabel(
+            "💡 Hướng dẫn lấy Token miễn phí:\n"
+            "1. Truy cập https://huggingface.co/settings/tokens (đăng nhập hoặc đăng ký tài khoản Hugging Face).\n"
+            "2. Nhấn 'Create new token' -> Chọn loại 'Read' -> Copy mã token (bắt đầu bằng hf_...).\n"
+            "3. Dán vào ô trên và nhấn 'Lưu cài đặt'. Token sẽ được áp dụng tự động cho Whisper, VieNeu và Demucs."
+        )
+        lbl_hf_guide.setStyleSheet("color: #7dcfff; padding: 8px; background-color: #1a1b26; border-radius: 4px;")
+        hf_layout.addWidget(lbl_hf_guide, 2, 0, 1, 2)
+
+        tab_sys_layout.addWidget(grp_hf)
+        tab_sys_layout.addStretch()
+
+        self.tabs.addTab(tab_sys, "Hệ Thống & Token HF")
+
+        # Tab 2: Gemini Web API (Cookie Authentication)
+        tab_gemini = QWidget()
+        gemini_layout = QGridLayout(tab_gemini)
+        gemini_layout.setSpacing(8)
+
+        lbl_gemini_title = QLabel("<b>⭐ Gemini Web API (Dịch AI Miễn Phí Qua Cookie Trình Duyệt):</b>")
+        lbl_gemini_title.setStyleSheet("color: #7aa2f7; font-size: 13px;")
+        gemini_layout.addWidget(lbl_gemini_title, 0, 0, 1, 2)
+
+        gemini_layout.addWidget(QLabel("Dán chuỗi Cookie Header từ trình duyệt:"), 1, 0, 1, 2)
+        self.input_gemini_cookie = QTextEdit()
+        self.input_gemini_cookie.setPlaceholderText(
+            "Dán toàn bộ chuỗi Cookie Header vào đây (ví dụ: __Secure-1PSID=...; __Secure-1PSIDTS=...)\n"
+            "Hệ thống sẽ tự động tìm và bóc tách __Secure-1PSID và __Secure-1PSIDTS ngay lập tức!"
+        )
+        self.input_gemini_cookie.setMaximumHeight(85)
+        self.input_gemini_cookie.setText(app_config.get("gemini_cookie", ""))
+        self.input_gemini_cookie.textChanged.connect(self._on_gemini_cookie_changed)
+        gemini_layout.addWidget(self.input_gemini_cookie, 2, 0, 1, 2)
+
+        self.lbl_cookie_status = QLabel("Trạng thái: Dán chuỗi cookie vào ô trên để tự động tách.")
+        self.lbl_cookie_status.setStyleSheet("color: #a9b1d6; font-style: italic;")
+        gemini_layout.addWidget(self.lbl_cookie_status, 3, 0, 1, 2)
+
+        gemini_layout.addWidget(QLabel("Proxy (Tùy chọn):"), 4, 0)
+        self.input_gemini_proxy = QLineEdit(app_config.get("gemini_proxy", ""))
+        self.input_gemini_proxy.setPlaceholderText("Ví dụ: http://127.0.0.1:7890 (để trống nếu không dùng proxy)")
+        gemini_layout.addWidget(self.input_gemini_proxy, 4, 1)
+
+        self.btn_test_gemini = QPushButton("🔍 Kiểm tra Kết nối Gemini Web API")
+        self.btn_test_gemini.setStyleSheet("background-color: #7aa2f7; color: #1a1b26; font-weight: bold; padding: 6px;")
+        self.btn_test_gemini.clicked.connect(self._test_gemini_api)
+        gemini_layout.addWidget(self.btn_test_gemini, 5, 0, 1, 2)
+
+        lbl_gemini_guide = QLabel(
+            "💡 Hướng dẫn lấy Cookie Gemini:\n"
+            "1. Truy cập gemini.google.com trên trình duyệt (đã đăng nhập Google).\n"
+            "2. Nhấn F12 > Thẻ Network > Gửi tin nhắn bất kỳ hoặc tải lại trang > Chọn 1 request > Xem Headers > Copy giá trị của dòng 'cookie:'.\n"
+            "3. Dán toàn bộ chuỗi cookie vào ô trên. Ứng dụng tự động bóc tách __Secure-1PSID (và __Secure-1PSIDTS nếu có).\n"
+            "4. Nếu tài khoản không có Secure_1PSIDTS, hệ thống vẫn kết nối bình thường với __Secure-1PSID."
+        )
+        lbl_gemini_guide.setStyleSheet("color: #7dcfff; padding: 8px; background-color: #1a1b26; border-radius: 4px;")
+        gemini_layout.addWidget(lbl_gemini_guide, 6, 0, 1, 2)
+
+        # Trigger cookie check on initial display
+        self._on_gemini_cookie_changed()
+
+        self.tabs.addTab(tab_gemini, "Gemini Web API (Cookie)")
+
+        # Tab 3: Translation API & Local Models
         tab_trans = QWidget()
         trans_layout = QGridLayout(tab_trans)
         trans_layout.setSpacing(8)
@@ -207,6 +307,54 @@ class SettingsDialog(QDialog):
         else:
             QMessageBox.critical(self, "Lỗi", f"Không tìm thấy công cụ FFmpeg hoặc FFprobe:\n{res.get('error')}")
 
+    def _toggle_hf_visibility(self):
+        if self.input_hf_token.echoMode() == QLineEdit.Password:
+            self.input_hf_token.setEchoMode(QLineEdit.Normal)
+            self.btn_toggle_hf.setText("🔒")
+            self.btn_toggle_hf.setToolTip("Ẩn Token")
+        else:
+            self.input_hf_token.setEchoMode(QLineEdit.Password)
+            self.btn_toggle_hf.setText("👁")
+            self.btn_toggle_hf.setToolTip("Hiện Token")
+
+    def _test_hf_token(self):
+        token = self.input_hf_token.text().strip()
+        if not token:
+            QMessageBox.warning(
+                self,
+                "Chưa nhập Token",
+                "Vui lòng dán mã Hugging Face Token (bắt đầu bằng hf_...) vào ô trên trước khi kiểm tra."
+            )
+            return
+
+        self.btn_test_hf.setEnabled(False)
+        self.btn_test_hf.setText("⏳ Đang kiểm tra...")
+        try:
+            import huggingface_hub
+            api = huggingface_hub.HfApi(token=token)
+            user_info = api.whoami()
+            username = user_info.get("name") or user_info.get("fullname") or "Thành công"
+            role = user_info.get("auth", {}).get("accessToken", {}).get("role", "read")
+            account_type = user_info.get("type", "user")
+
+            self.lbl_hf_status.setText(f"✅ Token hợp lệ! Đã xác thực tài khoản: {username} (Quyền: {role})")
+            self.lbl_hf_status.setStyleSheet("color: #9ece6a; font-weight: bold;")
+            QMessageBox.information(
+                self,
+                "Thành công",
+                f"Xác thực Hugging Face Token thành công!\n\n"
+                f"Tài khoản: {username}\n"
+                f"Loại: {account_type}\n"
+                f"Quyền hạn: {role}"
+            )
+        except Exception as e:
+            self.lbl_hf_status.setText(f"❌ Token không hợp lệ hoặc lỗi kết nối: {e}")
+            self.lbl_hf_status.setStyleSheet("color: #f7768e;")
+            QMessageBox.warning(self, "Thất bại", f"Không thể xác thực Hugging Face Token:\n{e}")
+        finally:
+            self.btn_test_hf.setEnabled(True)
+            self.btn_test_hf.setText("🔍 Kiểm tra Token")
+
     def _test_trans_api(self):
         from app.providers.translation_api import OpenAITranslationProvider
         prov = OpenAITranslationProvider(
@@ -231,6 +379,67 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "Thành công", msg)
         else:
             QMessageBox.warning(self, "Thất bại", msg)
+
+    def _on_gemini_cookie_changed(self):
+        raw = self.input_gemini_cookie.toPlainText().strip()
+        if raw:
+            from app.utils.cookie_utils import extract_gemini_cookies
+            psid, psidts = extract_gemini_cookies(raw)
+            self._extracted_psid = psid
+            self._extracted_psidts = psidts
+
+            if psid and psidts:
+                self.lbl_cookie_status.setText("✅ Đã tự động bóc tách thành công cả __Secure-1PSID và __Secure-1PSIDTS!")
+                self.lbl_cookie_status.setStyleSheet("color: #9ece6a; font-weight: bold;")
+            elif psid:
+                self.lbl_cookie_status.setText("✅ Đã tự động bóc tách __Secure-1PSID (sẵn sàng sử dụng, không cần Secure_1PSIDTS)!")
+                self.lbl_cookie_status.setStyleSheet("color: #9ece6a; font-weight: bold;")
+            elif psidts:
+                self.lbl_cookie_status.setText("⚠️ Đã tìm thấy __Secure-1PSIDTS nhưng thiếu __Secure-1PSID trong chuỗi cookie.")
+                self.lbl_cookie_status.setStyleSheet("color: #e0af68;")
+            else:
+                self.lbl_cookie_status.setText("❌ Không tìm thấy __Secure-1PSID trong chuỗi cookie đã dán.")
+                self.lbl_cookie_status.setStyleSheet("color: #f7768e;")
+        else:
+            self._extracted_psid = ""
+            self._extracted_psidts = ""
+            self.lbl_cookie_status.setText("Trạng thái: Dán chuỗi cookie vào ô trên để tự động tách.")
+            self.lbl_cookie_status.setStyleSheet("color: #a9b1d6; font-style: italic;")
+
+    def _test_gemini_api(self):
+        from app.providers.translation_api import GeminiWebAPITranslationProvider
+        from app.utils.cookie_utils import extract_gemini_cookies
+        raw = self.input_gemini_cookie.toPlainText().strip()
+        psid, psidts = extract_gemini_cookies(raw)
+        proxy = self.input_gemini_proxy.text().strip() or None
+
+        if not psid:
+            QMessageBox.warning(
+                self,
+                "Chưa có Cookie",
+                "Vui lòng dán chuỗi Cookie Header chứa __Secure-1PSID vào ô trên trước khi kiểm tra."
+            )
+            return
+
+        self.btn_test_gemini.setEnabled(False)
+        self.btn_test_gemini.setText("⏳ Đang kết nối kiểm tra Gemini...")
+        try:
+            prov = GeminiWebAPITranslationProvider(
+                secure_1psid=psid or None,
+                secure_1psidts=psidts or None,
+                proxy=proxy,
+                timeout=30
+            )
+            ok, msg = prov.test_connection()
+            if ok:
+                QMessageBox.information(self, "Thành công", msg)
+            else:
+                QMessageBox.warning(self, "Thất bại", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khởi tạo Gemini Web API: {e}")
+        finally:
+            self.btn_test_gemini.setEnabled(True)
+            self.btn_test_gemini.setText("🔍 Kiểm tra Kết nối Gemini Web API")
 
     def _test_google_trans(self):
         from app.providers.translation_api import GoogleFreeTranslationProvider
@@ -268,6 +477,16 @@ class SettingsDialog(QDialog):
     def _save_settings(self):
         app_config.set("ffmpeg_path", self.input_ffmpeg.text().strip(), False)
         app_config.set("ffprobe_path", self.input_ffprobe.text().strip(), False)
+        hf_token = self.input_hf_token.text().strip()
+        app_config.set("hf_token", hf_token, False)
+        apply_hf_token(hf_token)
+        from app.utils.cookie_utils import extract_gemini_cookies
+        cookie_raw = self.input_gemini_cookie.toPlainText().strip()
+        psid, psidts = extract_gemini_cookies(cookie_raw)
+        app_config.set("gemini_cookie", cookie_raw, False)
+        app_config.set("gemini_secure_1psid", psid, False)
+        app_config.set("gemini_secure_1psidts", psidts, False)
+        app_config.set("gemini_proxy", self.input_gemini_proxy.text().strip(), False)
         app_config.set("translation_base_url", self.input_trans_url.text().strip(), False)
         app_config.set("translation_api_key", self.input_trans_key.text().strip(), False)
         app_config.set("translation_model", self.input_trans_model.text().strip(), False)

@@ -2,6 +2,7 @@ import os
 import threading
 import logging
 from pathlib import Path
+import time
 from typing import List, Optional, Callable, Dict, Any
 
 from app.models import DialogueSegment
@@ -55,7 +56,24 @@ class SpeechSynthesisService:
 
         # Validate max_workers
         max_workers = max(1, min(max_workers, 16))
-        logger.info(f"Synthesizing {total} dialogue lines with voice '{voice_id}' using {max_workers} worker threads...")
+
+        # Check provider type: On-device offline models (VieNeu, Piper, Local)
+        # Cap offline workers at 3 to prevent excessive CPU thrashing / RAM usage,
+        # while enabling safe 2-3x parallel speedup via dedicated engine pool instances.
+        # Online cloud APIs (Edge-TTS, OpenAI) remain multi-threaded up to 16.
+        is_offline = False
+        if hasattr(self.provider, "get_capabilities"):
+            try:
+                is_offline = bool(self.provider.get_capabilities().get("is_offline", False))
+            except Exception:
+                is_offline = False
+        if is_offline:
+            max_workers = max(1, min(max_workers, 3))
+
+        logger.info(
+            f"Synthesizing {total} dialogue lines with voice '{voice_id}' using "
+            f"{max_workers} worker thread(s) (is_offline={is_offline})..."
+        )
 
         completed_count = 0
         progress_lock = threading.Lock()
@@ -100,26 +118,46 @@ class SpeechSynthesisService:
                 except Exception:
                     pass
 
-            # Synthesize new audio via provider
-            try:
-                duration = self.provider.synthesize(
-                    text=text,
-                    voice_id=voice_id,
-                    output_path=dlg_out_path,
-                    options=options
-                )
-                dlg.tts_audio_path = str(dlg_out_path)
-                dlg.tts_duration = duration
-                dlg.voice_id = voice_id
-                dlg.status = DialogueStatus.SYNTHESIZED
-                logger.info(f"Generated TTS for dialogue {dlg.id} ({idx + 1}/{total}) -> duration: {duration:.2f}s")
-            except Exception as e:
+            # Synthesize new audio via provider with retry
+            last_err = None
+            max_retries = 2
+            for attempt in range(max_retries):
+                if cancel_event and cancel_event.is_set():
+                    return
+                try:
+                    duration = self.provider.synthesize(
+                        text=text,
+                        voice_id=voice_id,
+                        output_path=dlg_out_path,
+                        options=options
+                    )
+                    dlg.tts_audio_path = str(dlg_out_path)
+                    dlg.tts_duration = duration
+                    dlg.voice_id = voice_id
+                    dlg.status = DialogueStatus.SYNTHESIZED
+                    logger.info(f"Generated TTS for dialogue {dlg.id} ({idx + 1}/{total}) -> duration: {duration:.2f}s")
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Lần thử {attempt + 1}/{max_retries} tạo TTS câu {dlg.id} thất bại ({e}). Thử lại...")
+                        time.sleep(0.5)
+
+            if last_err is not None:
                 dlg.status = DialogueStatus.ERROR
-                dlg.error_message = str(e)
-                logger.error(f"Failed to synthesize dialogue {dlg.id}: {e}")
+                dlg.error_message = str(last_err)
+                logger.error(f"Failed to synthesize dialogue {dlg.id}: {last_err}")
                 with progress_lock:
+                    completed_count += 1
                     if first_error is None:
-                        first_error = e
+                        first_error = last_err
+                    pct = int((completed_count / total) * 100)
+                    if on_progress:
+                        try:
+                            on_progress(pct, f"Đang tạo giọng đọc: {completed_count}/{total} câu ({pct}%)...")
+                        except Exception:
+                            pass
                 return
 
             with progress_lock:

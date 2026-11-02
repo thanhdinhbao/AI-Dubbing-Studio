@@ -1,20 +1,20 @@
 import threading
 import logging
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger("AIDubbingStudio.Worker")
 
 
-class BaseWorker(QObject):
-    """Base class for all background worker objects."""
+class BaseWorker(QThread):
+    """Base class for all background worker threads."""
 
     progress = Signal(int, str)  # percent, message
     finished = Signal(object)  # result object
     error = Signal(str)  # error description
     log_message = Signal(str)  # log line
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.cancel_event = threading.Event()
 
     def cancel(self):

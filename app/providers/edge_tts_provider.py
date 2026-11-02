@@ -97,35 +97,16 @@ class EdgeTTSProvider(BaseTTSProvider):
 
             # Convert to uncompressed WAV if requested
             if is_wav:
-                # Fast in-process conversion using PyAV
-                converted = False
-                try:
-                    import av
-                    with av.open(str(temp_mp3)) as in_container:
-                        if in_container.streams.audio:
-                            in_stream = in_container.streams.audio[0]
-                            with av.open(str(output_path), "w", format="wav") as out_container:
-                                out_stream = out_container.add_stream("pcm_s16le", rate=44100, layout="stereo")
-                                for frame in in_container.decode(in_stream):
-                                    for packet in out_stream.encode(frame):
-                                        out_container.mux(packet)
-                                for packet in out_stream.encode(None):
-                                    out_container.mux(packet)
-                            converted = True
-                except Exception as av_err:
-                    logger.debug(f"PyAV conversion failed ({av_err}), falling back to FFmpeg...")
-
-                if not converted:
-                    ffmpeg_bin = get_ffmpeg_path()
-                    conv_args = [
-                        ffmpeg_bin, "-y",
-                        "-i", str(temp_mp3),
-                        "-ar", "44100",
-                        "-ac", "2",
-                        "-c:a", "pcm_s16le",
-                        str(output_path)
-                    ]
-                    run_ffmpeg_process(conv_args)
+                ffmpeg_bin = get_ffmpeg_path()
+                conv_args = [
+                    ffmpeg_bin, "-y",
+                    "-i", str(temp_mp3),
+                    "-ar", "44100",
+                    "-ac", "2",
+                    "-c:a", "pcm_s16le",
+                    str(output_path)
+                ]
+                run_ffmpeg_process(conv_args)
 
                 if temp_mp3.exists() and temp_mp3 != output_path:
                     try:

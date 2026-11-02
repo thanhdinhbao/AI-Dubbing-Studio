@@ -5,7 +5,7 @@ QWidget {
     background-color: #1a1b26;
     color: #c0caf5;
     font-family: 'Segoe UI', 'San Francisco', Arial, sans-serif;
-    font-size: 13px;
+    font-size: 10pt;
     selection-background-color: #3d59a1;
     selection-color: #ffffff;
 }
@@ -25,7 +25,7 @@ QPushButton#NavButton {
     padding: 12px 16px;
     border: none;
     border-radius: 8px;
-    font-size: 13px;
+    font-size: 10pt;
     font-weight: 500;
 }
 
@@ -90,6 +90,12 @@ QPushButton#DangerButton {
 
 QPushButton#DangerButton:hover {
     background-color: #ff8b9e;
+}
+
+QPushButton#DangerButton:disabled {
+    background-color: #24283b;
+    color: #565f89;
+    border: 1px solid #1f2335;
 }
 
 /* Form inputs & controls */
